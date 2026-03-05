@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
+import java.util.function.Supplier;
 
 @RestController
 @RequestMapping("/internal/events/{eventId}")
@@ -33,7 +34,7 @@ public class InternalEventInventoryController {
             @PathVariable UUID eventId,
             @RequestBody @Valid InventoryInitRequest request
     ) {
-        try (MDC.MDCCloseable endpointLogGroup = MDC.putCloseable("logGroup", "internal-event-inventory-init")) {
+        return withLogGroup("internal-event-inventory-init", () -> {
             long startTimeNanos = System.nanoTime();
             log.info("Inventory initialization request received for eventId={}", eventId);
             InventoryInitResponse response = new InventoryInitResponse();
@@ -52,6 +53,12 @@ public class InternalEventInventoryController {
                 log.warn("Inventory initialization conflict for eventId={} reason={} latencyMs={}", eventId, e.getMessage(), latencyMs);
                 return ResponseEntity.status(HttpStatus.CONFLICT).body(response);
             }
+        });
+    }
+
+    private <T> T withLogGroup(String logGroup, Supplier<T> operation) {
+        try (MDC.MDCCloseable ignored = MDC.putCloseable("logGroup", logGroup)) {
+            return operation.get();
         }
     }
 }

@@ -27,6 +27,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 @RestController
 @RequestMapping("/events/{eventId}")
@@ -41,7 +42,7 @@ public class EventSeatsController {
 
     @GetMapping("/seats")
     public ResponseEntity<EventListResponse> getSeats(@PathVariable UUID eventId) {
-        try (MDC.MDCCloseable endpointLogGroup = MDC.putCloseable("logGroup", "event-seats-get")) {
+        return withLogGroup("event-seats-get", () -> {
             long startTimeNanos = System.nanoTime();
             log.info("getSeats request received for eventId={}", eventId);
             EventListResponse response = new EventListResponse();
@@ -60,7 +61,7 @@ public class EventSeatsController {
                 log.warn("getSeats failed for eventId={} reason={} latencyMs={}", eventId, e.getMessage(), latencyMs);
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
             }
-        }
+        });
     }
 
     @PostMapping("/locks")
@@ -68,8 +69,7 @@ public class EventSeatsController {
             @PathVariable UUID eventId,
             @RequestBody @Valid LockSeatsRequest request
     ) {
-        try (MDC.MDCCloseable endpointLogGroup = MDC.putCloseable("logGroup", "event-seats-lock");
-             MDC.MDCCloseable requestLogGroup = MDC.putCloseable("lockRequestId", request.getIdempotencyKey())) {
+        return withLogGroup("event-seats-lock", () -> {
             long startTimeNanos = System.nanoTime();
             log.info("lockSeats request received for eventId={} userId={} requestedSeatCount={} idempotencyKey={}",
                     eventId, request.getUserId(), request.getSeatIds() == null ? 0 : request.getSeatIds().size(), request.getIdempotencyKey());
@@ -95,7 +95,7 @@ public class EventSeatsController {
                 return ResponseEntity.status(HttpStatus.CONFLICT).body(response);
             }
             return ResponseEntity.ok(response);
-        }
+        });
     }
 
     @PostMapping("/locks/release")
@@ -103,7 +103,7 @@ public class EventSeatsController {
             @PathVariable UUID eventId,
             @RequestBody @Valid ReleaseLocksRequest request
     ) {
-        try (MDC.MDCCloseable endpointLogGroup = MDC.putCloseable("logGroup", "event-seats-release")) {
+        return withLogGroup("event-seats-release", () -> {
             long startTimeNanos = System.nanoTime();
             log.info("releaseLocks request received for eventId={} userId={} requestedSeatCount={}",
                     eventId, request.getUserId(), request.getSeatIds() == null ? 0 : request.getSeatIds().size());
@@ -129,11 +129,17 @@ public class EventSeatsController {
                         eventId, request.getUserId(), e.getMessage(), latencyMs);
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
             }
-        }
+        });
     }
     
     private <T extends ApiResponse> void setFailureResponse(String message, T response) {
         response.setStatus(ResponseStatus.FAILURE);
         response.setMessage(message);
+    }
+
+    private <T> T withLogGroup(String logGroup, Supplier<T> operation) {
+        try (MDC.MDCCloseable ignored = MDC.putCloseable("logGroup", logGroup)) {
+            return operation.get();
+        }
     }
 }
