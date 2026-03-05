@@ -1,8 +1,16 @@
 package com.example.seats_allocation_service.controllers;
 
+import com.example.seats_allocation_service.dtos.InventoryInitRequest;
+import com.example.seats_allocation_service.dtos.InventoryInitResponse;
+import com.example.seats_allocation_service.dtos.common.ResponseStatus;
+import com.example.seats_allocation_service.exceptions.EventInventoryAlreadyExistsException;
 import com.example.seats_allocation_service.models.EventInventoryContext;
-import com.example.seats_allocation_service.repository.EventInventoryContextRepository;
+import com.example.seats_allocation_service.service.EventInventoryService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -15,27 +23,35 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/internal/events/{eventId}")
 @RequiredArgsConstructor
+@Slf4j
 public class InternalEventInventoryController {
 
-    private final EventInventoryContextRepository eventInventoryContextRepository;
+    private final EventInventoryService eventInventoryService;
 
     @PostMapping("/inventory/init")
-    public ResponseEntity<EventInventoryContext> initializeInventory(
+    public ResponseEntity<InventoryInitResponse> initializeInventory(
             @PathVariable UUID eventId,
-            @RequestBody InventoryInitRequest request
+            @RequestBody @Valid InventoryInitRequest request
     ) {
-        // TODO: implement inventory initialization logic to set up event inventory context with venue and currency details
-        EventInventoryContext context = eventInventoryContextRepository
-                .findById(eventId)
-                .orElseGet(EventInventoryContext::new);
-
-        context.setId(eventId);
-        context.setVenueId(request.venueId());
-        context.setCurrency(request.currency());
-
-        return ResponseEntity.ok(eventInventoryContextRepository.save(context));
-    }
-
-    public record InventoryInitRequest(UUID venueId, String currency) {
+        try (MDC.MDCCloseable endpointLogGroup = MDC.putCloseable("logGroup", "internal-event-inventory-init")) {
+            long startTimeNanos = System.nanoTime();
+            log.info("Inventory initialization request received for eventId={}", eventId);
+            InventoryInitResponse response = new InventoryInitResponse();
+            try {
+                EventInventoryContext savedContext = eventInventoryService.initializeInventory(eventId, request);
+                response.setEventInventoryContext(savedContext);
+                response.setStatus(ResponseStatus.SUCCESS);
+                response.setMessage("Event initiated successfully");
+                long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
+                log.info("Inventory initialization completed for eventId={} latencyMs={}", eventId, latencyMs);
+                return ResponseEntity.ok(response);
+            } catch (EventInventoryAlreadyExistsException e) {
+                response.setStatus(ResponseStatus.FAILURE);
+                response.setMessage(e.getMessage());
+                long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
+                log.warn("Inventory initialization conflict for eventId={} reason={} latencyMs={}", eventId, e.getMessage(), latencyMs);
+                return ResponseEntity.status(HttpStatus.CONFLICT).body(response);
+            }
+        }
     }
 }
