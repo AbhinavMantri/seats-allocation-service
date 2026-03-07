@@ -1,5 +1,8 @@
 package com.example.seats_allocation_service.config;
 
+import com.example.seats_allocation_service.service.JWTService;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
@@ -17,5 +20,19 @@ public class WebConfig implements WebMvcConfigurer {
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(internalApiAccessInterceptor)
                 .addPathPatterns("/internal/events/**");
+    }
+
+    @Bean
+    public FilterRegistrationBean<EventSeatsJwtAuthenticationFilter> eventSeatsJwtAuthenticationFilterRegistration(
+            JWTService jwtService
+    ) {
+        FilterRegistrationBean<EventSeatsJwtAuthenticationFilter> registration = new FilterRegistrationBean<>();
+        registration.setFilter(new EventSeatsJwtAuthenticationFilter(jwtService));
+        registration.addUrlPatterns("/events/*");
+        registration.addUrlPatterns("/events/*/seats");
+        registration.addUrlPatterns("/events/*/locks");
+        registration.addUrlPatterns("/events/*/locks/release");
+        registration.setOrder(1);
+        return registration;
     }
 }
