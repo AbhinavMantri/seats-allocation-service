@@ -3,11 +3,11 @@ package com.example.seats_allocation_service.models;
 import jakarta.persistence.Column;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
 import jakarta.persistence.MappedSuperclass;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import lombok.Data;
-import org.springframework.data.annotation.Id;
 
 import java.time.Instant;
 import java.util.UUID;
