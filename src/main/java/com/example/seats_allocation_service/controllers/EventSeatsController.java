@@ -4,6 +4,7 @@ import com.example.seats_allocation_service.dtos.EventListResponse;
 import com.example.seats_allocation_service.dtos.LockSeatResponse;
 import com.example.seats_allocation_service.dtos.LockSeatsRequest;
 import com.example.seats_allocation_service.dtos.ReleaseLocksRequest;
+import com.example.seats_allocation_service.dtos.SeatAvailabilityResponse;
 import com.example.seats_allocation_service.dtos.common.ApiResponse;
 import com.example.seats_allocation_service.dtos.common.ResponseStatus;
 import com.example.seats_allocation_service.exceptions.EventNotFoundException;
@@ -132,6 +133,36 @@ public class EventSeatsController {
         });
     }
     
+    @GetMapping("/seats/availability")
+    public ResponseEntity<SeatAvailabilityResponse> getAvailabilitySummary(@PathVariable UUID eventId) {
+        return withLogGroup("event-seats-availability", () -> {
+            long startTimeNanos = System.nanoTime();
+            log.info("seat availablity summary request received for eventId={}", eventId);
+            try {
+                SeatAvailabilityResponse response = eventSeatService.getAvailabilitySummary(eventId);
+                response.setStatus(ResponseStatus.SUCCESS);
+                response.setMessage("Seat availability summary fetched successfully");
+                long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
+                log.info("seat availablity summary succeeded for eventId={} totalSeats={} availableSeats={} lockedSeats={} latencyMs={}",
+                        eventId, response.getTotalSeats(), response.getAvailableSeats(), response.getLockedSeats(), latencyMs);
+                return ResponseEntity.ok(response);
+            } catch (EventNotFoundException e) {
+                SeatAvailabilityResponse response = new SeatAvailabilityResponse();
+                setFailureResponse(e.getMessage(), response);
+                long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
+                log.warn("seat availablity summary failed: event not found for eventId={} reason={} latencyMs={}",
+                        eventId, e.getMessage(), latencyMs);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+            } catch (Exception e) {
+                SeatAvailabilityResponse response = new SeatAvailabilityResponse();
+                setFailureResponse("Failed to fetch seat availability summary", response);
+                long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
+                log.error("seat availablity summary failed unexpectedly for eventId={} latencyMs={}", eventId, latencyMs, e);
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+            }
+        });
+    }
+
     private <T extends ApiResponse> void setFailureResponse(String message, T response) {
         response.setStatus(ResponseStatus.FAILURE);
         response.setMessage(message);

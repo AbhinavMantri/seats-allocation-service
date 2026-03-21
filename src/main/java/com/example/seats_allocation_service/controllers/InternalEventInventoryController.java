@@ -2,6 +2,7 @@ package com.example.seats_allocation_service.controllers;
 
 import com.example.seats_allocation_service.dtos.InventoryInitRequest;
 import com.example.seats_allocation_service.dtos.InventoryInitResponse;
+import com.example.seats_allocation_service.dtos.common.ApiResponse;
 import com.example.seats_allocation_service.dtos.common.ResponseStatus;
 import com.example.seats_allocation_service.exceptions.EventInventoryAlreadyExistsException;
 import com.example.seats_allocation_service.models.EventInventoryContext;

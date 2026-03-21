@@ -19,7 +19,8 @@ public class WebConfig implements WebMvcConfigurer {
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(internalApiAccessInterceptor)
-                .addPathPatterns("/internal/events/**");
+                .addPathPatterns("/events/**")
+                .addPathPatterns("/internal/seats/**");
     }
 
     @Bean
@@ -30,6 +31,7 @@ public class WebConfig implements WebMvcConfigurer {
         registration.setFilter(new EventSeatsJwtAuthenticationFilter(jwtService));
         registration.addUrlPatterns("/events/*");
         registration.addUrlPatterns("/events/*/seats");
+        registration.addUrlPatterns("/events/*/availability");
         registration.addUrlPatterns("/events/*/locks");
         registration.addUrlPatterns("/events/*/locks/release");
         registration.setOrder(1);

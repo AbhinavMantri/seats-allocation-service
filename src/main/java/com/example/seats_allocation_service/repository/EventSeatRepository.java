@@ -12,6 +12,7 @@ import java.util.UUID;
 
 public interface EventSeatRepository extends JpaRepository<EventSeat, UUID> {
     List<EventSeat> findByEventId(UUID eventId);
+    List<EventSeat> findByLockedByAndStatus(UUID lockedBy, EventSeat.SeatStatus status);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select s from EventSeat s where s.eventId = :eventId and s.id in :seatIds")

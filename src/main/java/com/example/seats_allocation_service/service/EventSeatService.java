@@ -1,6 +1,7 @@
 package com.example.seats_allocation_service.service;
 
 import com.example.seats_allocation_service.dtos.InventoryPricing;
+import com.example.seats_allocation_service.dtos.SeatAvailabilityResponse;
 import com.example.seats_allocation_service.exceptions.EventNotFoundException;
 import com.example.seats_allocation_service.exceptions.SeatLockConflictException;
 import com.example.seats_allocation_service.exceptions.SeatsNotFoundException;
@@ -119,6 +120,40 @@ public class EventSeatService {
 
             log.info("getSeats completed for eventId={} with seatCount={}", eventId, seats.size());
             return seats;
+        }
+    }
+
+    public SeatAvailabilityResponse getAvailabilitySummary(UUID eventId) {
+        try (MDC.MDCCloseable serviceLogGroup = MDC.putCloseable("logGroup", "event-seats-availability")) {
+            List<EventSeat> seats = eventSeatRepository.findByEventId(eventId);
+            if (seats == null || seats.isEmpty()) {
+                if (!eventInventoryContextRepository.existsById(eventId)) {
+                    throw new EventNotFoundException("Event not found for eventId: " + eventId);
+                }
+            }
+
+            Instant now = Instant.now();
+            int availableSeats = 0;
+            int lockedSeats = 0;
+
+            for (EventSeat seat : seats) {
+                if (seat.getStatus() == EventSeat.SeatStatus.LOCKED
+                        && seat.getLockExpiresAt() != null
+                        && seat.getLockExpiresAt().isAfter(now)) {
+                    lockedSeats++;
+                } else if (seat.getStatus() == EventSeat.SeatStatus.AVAILABLE
+                        || (seat.getStatus() == EventSeat.SeatStatus.LOCKED
+                        && (seat.getLockExpiresAt() == null
+                        || !seat.getLockExpiresAt().isAfter(now)))) {
+                    availableSeats++;
+                }
+            }
+
+            SeatAvailabilityResponse response = new SeatAvailabilityResponse();
+            response.setTotalSeats(seats.size());
+            response.setAvailableSeats(availableSeats);
+            response.setLockedSeats(lockedSeats);
+            return response;
         }
     }
 
