@@ -1,23 +1,28 @@
 package com.example.seats_allocation_service.controllers;
 
-import com.example.seats_allocation_service.dtos.InventoryInitRequest;
-import com.example.seats_allocation_service.dtos.InventoryInitResponse;
-import com.example.seats_allocation_service.dtos.common.ResponseStatus;
+import com.example.seats_allocation_service.dtos.InventoryInitializedEvent;
+import com.example.seats_allocation_service.dtos.InventoryInitRequestedEvent;
 import com.example.seats_allocation_service.exceptions.EventInventoryAlreadyExistsException;
-import com.example.seats_allocation_service.models.EventInventoryContext;
 import com.example.seats_allocation_service.service.EventInventoryService;
+import com.example.seats_allocation_service.service.EventSeatService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.test.util.ReflectionTestUtils;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.UUID;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -27,46 +32,80 @@ class InternalEventInventoryControllerTest {
     @Mock
     private EventInventoryService eventInventoryService;
 
-    @InjectMocks
+    @Mock
+    private EventSeatService eventSeatService;
+
+    @Mock
+    private KafkaTemplate<String, String> kafkaTemplate;
+
     private InternalEventInventoryController internalEventInventoryController;
+    private ObjectMapper objectMapper;
 
-    @Test
-    void initializeInventory_whenSuccessful_returnsOkWithSuccessPayload() {
-        UUID eventId = UUID.randomUUID();
-        UUID venueId = UUID.randomUUID();
-        InventoryInitRequest request = new InventoryInitRequest();
-
-        EventInventoryContext savedContext = new EventInventoryContext();
-        savedContext.setId(eventId);
-        savedContext.setVenueId(venueId);
-        savedContext.setCurrency("USD");
-
-        when(eventInventoryService.initializeInventory(eventId, request)).thenReturn(savedContext);
-
-        ResponseEntity<InventoryInitResponse> response = internalEventInventoryController.initializeInventory(eventId, request);
-
-        assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertNotNull(response.getBody());
-        assertEquals(ResponseStatus.SUCCESS, response.getBody().getStatus());
-        assertEquals("Event initiated successfully", response.getBody().getMessage());
-        assertEquals(savedContext, response.getBody().getEventInventoryContext());
-        verify(eventInventoryService).initializeInventory(eventId, request);
+    @BeforeEach
+    void setUp() {
+        objectMapper = new ObjectMapper();
+        internalEventInventoryController = new InternalEventInventoryController(
+                eventInventoryService,
+                eventSeatService,
+                kafkaTemplate,
+                objectMapper
+        );
+        ReflectionTestUtils.setField(internalEventInventoryController, "inventoryInitResultTopic", "inventory-init.v1");
     }
 
     @Test
-    void initializeInventory_whenInventoryAlreadyExists_returnsConflictWithFailurePayload() {
-        UUID eventId = UUID.randomUUID();
-        InventoryInitRequest request = new InventoryInitRequest();
+    void initializeInventory_whenPayloadIsValid_callsServiceAndPublishesSuccessEvent() throws Exception {
+        InventoryInitRequestedEvent event = event();
+        String payload = objectMapper.writeValueAsString(event);
+        when(eventSeatService.getSeatCount(event.getEventId())).thenReturn(12);
 
-        when(eventInventoryService.initializeInventory(eventId, request))
-                .thenThrow(new EventInventoryAlreadyExistsException("already exists"));
+        internalEventInventoryController.initializeInventory(payload);
 
-        ResponseEntity<InventoryInitResponse> response = internalEventInventoryController.initializeInventory(eventId, request);
+        verify(eventInventoryService).initializeInventory(event);
+        verify(eventSeatService).getSeatCount(event.getEventId());
+        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+        verify(kafkaTemplate).send(
+                org.mockito.ArgumentMatchers.eq("inventory-init.v1"),
+                org.mockito.ArgumentMatchers.eq(event.getEventId().toString()),
+                payloadCaptor.capture()
+        );
+        InventoryInitializedEvent published = objectMapper.readValue(payloadCaptor.getValue(), InventoryInitializedEvent.class);
+        assertEquals(event.getRequestId(), published.getRequestId());
+        assertEquals(event.getEventId(), published.getEventId());
+        assertEquals("SUCCESS", published.getStatus());
+        assertEquals(12, published.getTotalSeats());
+        assertEquals(3, published.getSeatMapVersion());
+        assertNotNull(published.getProcessedAt());
+    }
 
-        assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
-        assertNotNull(response.getBody());
-        assertEquals(ResponseStatus.FAILURE, response.getBody().getStatus());
-        assertEquals("already exists", response.getBody().getMessage());
-        verify(eventInventoryService).initializeInventory(eventId, request);
+    @Test
+    void initializeInventory_whenInventoryAlreadyExists_doesNotThrow() throws Exception {
+        InventoryInitRequestedEvent event = event();
+        String payload = objectMapper.writeValueAsString(event);
+        doThrow(new EventInventoryAlreadyExistsException("already exists"))
+                .when(eventInventoryService)
+                .initializeInventory(event);
+
+        assertDoesNotThrow(() -> internalEventInventoryController.initializeInventory(payload));
+        verify(eventInventoryService).initializeInventory(event);
+        verify(kafkaTemplate, never()).send(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    void initializeInventory_whenPayloadIsInvalid_throwsIllegalArgumentException() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> internalEventInventoryController.initializeInventory("{invalid-json")
+        );
+    }
+
+    private InventoryInitRequestedEvent event() {
+        InventoryInitRequestedEvent event = new InventoryInitRequestedEvent();
+        event.setRequestId("req-init-001");
+        event.setEventId(UUID.randomUUID());
+        event.setVenueId(UUID.randomUUID());
+        event.setInventoryType("RESERVED");
+        event.setSeatMapVersion(3);
+        return event;
     }
 }

@@ -4,6 +4,7 @@ import com.example.seats_allocation_service.dtos.EventListResponse;
 import com.example.seats_allocation_service.dtos.LockSeatResponse;
 import com.example.seats_allocation_service.dtos.LockSeatsRequest;
 import com.example.seats_allocation_service.dtos.ReleaseLocksRequest;
+import com.example.seats_allocation_service.dtos.SeatAvailabilityResponse;
 import com.example.seats_allocation_service.dtos.common.ApiResponse;
 import com.example.seats_allocation_service.dtos.common.ResponseStatus;
 import com.example.seats_allocation_service.exceptions.EventNotFoundException;
@@ -59,6 +60,40 @@ class EventSeatsControllerTest {
         when(eventSeatService.getSeats(eventId)).thenThrow(new EventNotFoundException("missing event"));
 
         ResponseEntity<EventListResponse> response = eventSeatsController.getSeats(eventId);
+
+        assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(ResponseStatus.FAILURE, response.getBody().getStatus());
+        assertEquals("missing event", response.getBody().getMessage());
+    }
+
+    @Test
+    void getAvailabilitySummary_whenEventExists_returnsOkResponse() {
+        UUID eventId = UUID.randomUUID();
+        SeatAvailabilityResponse serviceResponse = new SeatAvailabilityResponse();
+        serviceResponse.setTotalSeats(100);
+        serviceResponse.setAvailableSeats(70);
+        serviceResponse.setLockedSeats(20);
+        when(eventSeatService.getAvailabilitySummary(eventId)).thenReturn(serviceResponse);
+
+        ResponseEntity<SeatAvailabilityResponse> response = eventSeatsController.getAvailabilitySummary(eventId);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(ResponseStatus.SUCCESS, response.getBody().getStatus());
+        assertEquals("Seat availability summary fetched successfully", response.getBody().getMessage());
+        assertEquals(100, response.getBody().getTotalSeats());
+        assertEquals(70, response.getBody().getAvailableSeats());
+        assertEquals(20, response.getBody().getLockedSeats());
+        verify(eventSeatService).getAvailabilitySummary(eventId);
+    }
+
+    @Test
+    void getAvailabilitySummary_whenEventDoesNotExist_returnsNotFound() {
+        UUID eventId = UUID.randomUUID();
+        when(eventSeatService.getAvailabilitySummary(eventId)).thenThrow(new EventNotFoundException("missing event"));
+
+        ResponseEntity<SeatAvailabilityResponse> response = eventSeatsController.getAvailabilitySummary(eventId);
 
         assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
         assertNotNull(response.getBody());

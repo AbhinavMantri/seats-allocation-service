@@ -1,6 +1,8 @@
 package com.example.seats_allocation_service.controllers;
 
 import com.example.seats_allocation_service.config.EventSeatsJwtAuthenticationFilter;
+import com.example.seats_allocation_service.dtos.SeatAvailabilityResponse;
+import com.example.seats_allocation_service.exceptions.EventNotFoundException;
 import com.example.seats_allocation_service.exceptions.SeatLockConflictException;
 import com.example.seats_allocation_service.models.EventSeat;
 import com.example.seats_allocation_service.service.EventSeatService;
@@ -150,6 +152,38 @@ class EventSeatsControllerApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("SUCCESS"))
                 .andExpect(jsonPath("$.message").value("Released 1 seat lock(s)"));
+    }
+
+    @Test
+    void getAvailabilitySummaryApi_whenSuccessful_returnsSummaryPayload() throws Exception {
+        UUID eventId = UUID.randomUUID();
+        SeatAvailabilityResponse response = new SeatAvailabilityResponse();
+        response.setTotalSeats(120);
+        response.setAvailableSeats(90);
+        response.setLockedSeats(15);
+        when(eventSeatService.getAvailabilitySummary(eventId)).thenReturn(response);
+
+        mockMvc.perform(get("/events/{eventId}/seats/availability", eventId)
+                        .header(EventSeatsJwtAuthenticationFilter.HEADER_AUTHORIZATION, "Bearer " + jwt()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SUCCESS"))
+                .andExpect(jsonPath("$.message").value("Seat availability summary fetched successfully"))
+                .andExpect(jsonPath("$.totalSeats").value(120))
+                .andExpect(jsonPath("$.availableSeats").value(90))
+                .andExpect(jsonPath("$.lockedSeats").value(15));
+    }
+
+    @Test
+    void getAvailabilitySummaryApi_whenEventDoesNotExist_returnsNotFound() throws Exception {
+        UUID eventId = UUID.randomUUID();
+        when(eventSeatService.getAvailabilitySummary(eventId))
+                .thenThrow(new EventNotFoundException("missing event"));
+
+        mockMvc.perform(get("/events/{eventId}/seats/availability", eventId)
+                        .header(EventSeatsJwtAuthenticationFilter.HEADER_AUTHORIZATION, "Bearer " + jwt()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.status").value("FAILURE"))
+                .andExpect(jsonPath("$.message").value("missing event"));
     }
 
     @Test

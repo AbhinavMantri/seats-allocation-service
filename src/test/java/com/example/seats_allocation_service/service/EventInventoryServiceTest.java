@@ -1,14 +1,15 @@
 package com.example.seats_allocation_service.service;
 
+import com.example.seats_allocation_service.dtos.InventoryInitRequestedEvent;
 import com.example.seats_allocation_service.dtos.InventoryInitRequest;
 import com.example.seats_allocation_service.dtos.InventoryPricing;
 import com.example.seats_allocation_service.exceptions.EventInventoryAlreadyExistsException;
 import com.example.seats_allocation_service.models.EventInventoryContext;
 import com.example.seats_allocation_service.repository.EventInventoryContextRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -33,8 +34,16 @@ class EventInventoryServiceTest {
     @Mock
     private EventSeatService eventSeatService;
 
-    @InjectMocks
     private EventInventoryService eventInventoryService;
+
+    @BeforeEach
+    void setUp() {
+        eventInventoryService = new EventInventoryService(
+                eventInventoryContextRepository,
+                eventSeatService,
+                "USD"
+        );
+    }
 
     @Test
     void initializeInventory_whenRequestContainsPricing_savesContextAndInitializesSeats() {
@@ -105,6 +114,28 @@ class EventInventoryServiceTest {
         );
 
         verify(eventInventoryContextRepository, never()).save(any(EventInventoryContext.class));
+        verify(eventSeatService, never()).initializeInventory(any(UUID.class), any());
+    }
+
+    @Test
+    void initializeInventory_whenKafkaEventIsReceived_mapsToDefaultCurrencyRequest() {
+        UUID eventId = UUID.randomUUID();
+        UUID venueId = UUID.randomUUID();
+        InventoryInitRequestedEvent event = new InventoryInitRequestedEvent();
+        event.setEventId(eventId);
+        event.setVenueId(venueId);
+        event.setRequestId("req-init-001");
+
+        when(eventInventoryContextRepository.existsById(eventId)).thenReturn(false);
+        when(eventInventoryContextRepository.save(any(EventInventoryContext.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        EventInventoryContext result = eventInventoryService.initializeInventory(event);
+
+        assertNotNull(result);
+        assertEquals(eventId, result.getId());
+        assertEquals(venueId, result.getVenueId());
+        assertEquals("USD", result.getCurrency());
         verify(eventSeatService, never()).initializeInventory(any(UUID.class), any());
     }
 }

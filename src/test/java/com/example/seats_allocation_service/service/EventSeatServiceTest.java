@@ -96,6 +96,34 @@ class EventSeatServiceTest {
     }
 
     @Test
+    void getAvailabilitySummary_whenSeatsExist_returnsCounts() {
+        UUID eventId = UUID.randomUUID();
+        EventSeat availableSeat = seat(eventId, UUID.randomUUID(), EventSeat.SeatStatus.AVAILABLE);
+        EventSeat activeLockedSeat = seat(eventId, UUID.randomUUID(), EventSeat.SeatStatus.LOCKED);
+        activeLockedSeat.setLockExpiresAt(Instant.now().plusSeconds(300));
+        EventSeat expiredLockedSeat = seat(eventId, UUID.randomUUID(), EventSeat.SeatStatus.LOCKED);
+        expiredLockedSeat.setLockExpiresAt(Instant.now().minusSeconds(60));
+        EventSeat bookedSeat = seat(eventId, UUID.randomUUID(), EventSeat.SeatStatus.BOOKED);
+        when(eventSeatRepository.findByEventId(eventId))
+                .thenReturn(List.of(availableSeat, activeLockedSeat, expiredLockedSeat, bookedSeat));
+
+        var result = eventSeatService.getAvailabilitySummary(eventId);
+
+        assertEquals(4, result.getTotalSeats());
+        assertEquals(2, result.getAvailableSeats());
+        assertEquals(1, result.getLockedSeats());
+    }
+
+    @Test
+    void getAvailabilitySummary_whenEventIsMissing_throwsEventNotFound() {
+        UUID eventId = UUID.randomUUID();
+        when(eventSeatRepository.findByEventId(eventId)).thenReturn(List.of());
+        when(eventInventoryContextRepository.existsById(eventId)).thenReturn(false);
+
+        assertThrows(EventNotFoundException.class, () -> eventSeatService.getAvailabilitySummary(eventId));
+    }
+
+    @Test
     void lockSeats_whenResponseIsCached_returnsWithoutDbWrites() {
         UUID eventId = UUID.randomUUID();
         UUID userId = UUID.randomUUID();

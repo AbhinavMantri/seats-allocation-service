@@ -544,7 +544,7 @@ Published by Event Management Service.
 
 ### Topic
 ```text
-inventory-init-request
+inventory-init.v1
 ```
 
 ### Payload
@@ -566,7 +566,7 @@ Published by Seat Allocation Service after successful inventory creation.
 
 ### Topic
 ```text
-inventory-init.v1
+inventory-published.v1
 ```
 
 ### Payload
@@ -590,26 +590,6 @@ inventory-init.v1
   "errorCode": "SEAT_MAP_NOT_FOUND",
   "message": "Seat map metadata missing",
   "processedAt": "2026-03-16T15:30:00Z"
-}
-```
-
----
-
-## 3. SeatLockExpired
-Optional background event for observability/workflow sync.
-
-### Topic
-```text
-seat-lock-expired
-```
-
-### Payload
-```json
-{
-  "eventId": "evt_1001",
-  "bookingId": "bk_9001",
-  "seatIds": ["A1", "A2", "A3"],
-  "expiredAt": "2026-03-16T15:50:00Z"
 }
 ```
 
@@ -651,7 +631,8 @@ These should be finalized while implementing:
 ---
 
 # Future Considerations
-1. block and unblock seats api.
+1. Block and Unblock seats api.
+2. SeatLockExpired background event for observability/workflow sync.
 
 ## Author
 

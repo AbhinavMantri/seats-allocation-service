@@ -157,6 +157,10 @@ public class EventSeatService {
         }
     }
 
+    public int getSeatCount(UUID eventId) {
+        return eventSeatRepository.countByEventId(eventId);
+    }
+
     @Transactional
     public void lockSeats(UUID eventId, String idempotencyKey, UUID userId, List<UUID> seatIds) throws EventNotFoundException, SeatsNotFoundException, SeatLockConflictException {
         long startTimeNanos = System.nanoTime();

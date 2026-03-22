@@ -2,12 +2,14 @@ package com.example.seats_allocation_service.service;
 
 import com.example.seats_allocation_service.dtos.InventoryPricing;
 import com.example.seats_allocation_service.dtos.InventoryInitRequest;
+import com.example.seats_allocation_service.dtos.InventoryInitRequestedEvent;
 import com.example.seats_allocation_service.exceptions.EventInventoryAlreadyExistsException;
 import com.example.seats_allocation_service.models.EventInventoryContext;
 import com.example.seats_allocation_service.repository.EventInventoryContextRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,11 +22,25 @@ public class EventInventoryService {
     private final EventInventoryContextRepository eventInventoryContextRepository;
 
     private final EventSeatService eventSeatService;
+    private final String defaultCurrency;
 
     @Autowired
-    public EventInventoryService(EventInventoryContextRepository eventInventoryContextRepository,  EventSeatService eventSeatService) {
+    public EventInventoryService(
+            EventInventoryContextRepository eventInventoryContextRepository,
+            EventSeatService eventSeatService,
+            @Value("${app.inventory.default-currency:USD}") String defaultCurrency
+    ) {
         this.eventInventoryContextRepository = eventInventoryContextRepository;
         this.eventSeatService = eventSeatService;
+        this.defaultCurrency = defaultCurrency;
+    }
+
+    public EventInventoryContext initializeInventory(InventoryInitRequestedEvent event) throws EventInventoryAlreadyExistsException {
+        InventoryInitRequest request = new InventoryInitRequest();
+        request.setVenueId(event.getVenueId());
+        request.setCurrency(defaultCurrency);
+        request.setPricing(Set.<InventoryPricing>of());
+        return initializeInventory(event.getEventId(), request);
     }
 
     @Transactional

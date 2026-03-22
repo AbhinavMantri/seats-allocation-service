@@ -1,65 +1,81 @@
 package com.example.seats_allocation_service.controllers;
 
-import com.example.seats_allocation_service.dtos.InventoryInitRequest;
-import com.example.seats_allocation_service.dtos.InventoryInitResponse;
-import com.example.seats_allocation_service.dtos.common.ApiResponse;
-import com.example.seats_allocation_service.dtos.common.ResponseStatus;
+import com.example.seats_allocation_service.dtos.InventoryInitializedEvent;
+import com.example.seats_allocation_service.dtos.InventoryInitRequestedEvent;
 import com.example.seats_allocation_service.exceptions.EventInventoryAlreadyExistsException;
-import com.example.seats_allocation_service.models.EventInventoryContext;
 import com.example.seats_allocation_service.service.EventInventoryService;
-import jakarta.validation.Valid;
+import com.example.seats_allocation_service.service.EventSeatService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+import tools.jackson.databind.ObjectMapper;
 
-import java.util.UUID;
-import java.util.function.Supplier;
+import java.time.Instant;
 
-@RestController
-@RequestMapping("/internal/events/{eventId}")
+@Component
 @RequiredArgsConstructor
 @Slf4j
 public class InternalEventInventoryController {
 
     private final EventInventoryService eventInventoryService;
+    private final EventSeatService eventSeatService;
+    private final KafkaTemplate<String, String> kafkaTemplate;
+    private final ObjectMapper objectMapper;
+    @Value("${app.kafka.topics.inventory-init-result:inventory-init.v1}")
+    private String inventoryInitResultTopic;
 
-    @PostMapping("/inventory/init")
-    public ResponseEntity<InventoryInitResponse> initializeInventory(
-            @PathVariable UUID eventId,
-            @RequestBody @Valid InventoryInitRequest request
-    ) {
-        return withLogGroup("internal-event-inventory-init", () -> {
+    @KafkaListener(
+            topics = "${app.kafka.topics.inventory-init-request:inventory-init-request}",
+            groupId = "${spring.application.name}"
+    )
+    public void initializeInventory(String payload) {
+        try (MDC.MDCCloseable ignored = MDC.putCloseable("logGroup", "inventory-init-request")) {
             long startTimeNanos = System.nanoTime();
-            log.info("Inventory initialization request received for eventId={}", eventId);
-            InventoryInitResponse response = new InventoryInitResponse();
+            InventoryInitRequestedEvent event = readEvent(payload);
+            log.info("Inventory init event received for requestId={} eventId={} venueId={} inventoryType={} seatMapVersion={}",
+                    event.getRequestId(), event.getEventId(), event.getVenueId(), event.getInventoryType(), event.getSeatMapVersion());
             try {
-                EventInventoryContext savedContext = eventInventoryService.initializeInventory(eventId, request);
-                response.setEventInventoryContext(savedContext);
-                response.setStatus(ResponseStatus.SUCCESS);
-                response.setMessage("Event initiated successfully");
+                eventInventoryService.initializeInventory(event);
+                publishInventoryInitialized(event);
                 long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
-                log.info("Inventory initialization completed for eventId={} latencyMs={}", eventId, latencyMs);
-                return ResponseEntity.ok(response);
+                log.info("Inventory init event processed for requestId={} eventId={} latencyMs={}",
+                        event.getRequestId(), event.getEventId(), latencyMs);
             } catch (EventInventoryAlreadyExistsException e) {
-                response.setStatus(ResponseStatus.FAILURE);
-                response.setMessage(e.getMessage());
                 long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
-                log.warn("Inventory initialization conflict for eventId={} reason={} latencyMs={}", eventId, e.getMessage(), latencyMs);
-                return ResponseEntity.status(HttpStatus.CONFLICT).body(response);
+                log.warn("Inventory init event skipped for requestId={} eventId={} reason={} latencyMs={}",
+                        event.getRequestId(), event.getEventId(), e.getMessage(), latencyMs);
             }
-        });
+        }
     }
 
-    private <T> T withLogGroup(String logGroup, Supplier<T> operation) {
-        try (MDC.MDCCloseable ignored = MDC.putCloseable("logGroup", logGroup)) {
-            return operation.get();
+    private InventoryInitRequestedEvent readEvent(String payload) {
+        try {
+            return objectMapper.readValue(payload, InventoryInitRequestedEvent.class);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Failed to parse inventory-init-request payload", e);
+        }
+    }
+
+    private void publishInventoryInitialized(InventoryInitRequestedEvent event) {
+        try {
+            InventoryInitializedEvent resultEvent = InventoryInitializedEvent.builder()
+                    .requestId(event.getRequestId())
+                    .eventId(event.getEventId())
+                    .status("SUCCESS")
+                    .totalSeats(eventSeatService.getSeatCount(event.getEventId()))
+                    .seatMapVersion(event.getSeatMapVersion())
+                    .processedAt(Instant.now())
+                    .build();
+            String payload = objectMapper.writeValueAsString(resultEvent);
+            kafkaTemplate.send(inventoryInitResultTopic, event.getEventId().toString(), payload);
+            log.info("Published inventory initialized event for requestId={} eventId={} topic={}",
+                    event.getRequestId(), event.getEventId(), inventoryInitResultTopic);
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to publish inventory-init result event", e);
         }
     }
 }
