@@ -8,6 +8,7 @@ import com.example.seats_allocation_service.dtos.SeatConfirmResponse;
 import com.example.seats_allocation_service.dtos.SeatsConfirmation;
 import com.example.seats_allocation_service.dtos.common.ResponseStatus;
 import com.example.seats_allocation_service.exceptions.EventNotFoundException;
+import com.example.seats_allocation_service.exceptions.IdempotencyConflictException;
 import com.example.seats_allocation_service.exceptions.SeatLockConflictException;
 import com.example.seats_allocation_service.exceptions.SeatsNotFoundException;
 import com.example.seats_allocation_service.service.InternalSeatsService;
@@ -20,6 +21,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -31,19 +33,25 @@ public class InternalSeatsController {
     private final InternalSeatsService internalSeatsService;
 
     @PostMapping("/confirm")
-    public ResponseEntity<SeatConfirmResponse> confirmSeats(@RequestBody @Valid SeatConfirmRequest request) {
+    public ResponseEntity<SeatConfirmResponse> confirmSeats(
+            @RequestHeader("X-Idempotency-Key") String idempotencyKey,
+            @RequestBody @Valid SeatConfirmRequest request
+    ) {
         try (MDC.MDCCloseable ignored = MDC.putCloseable("logGroup", "internal-seats-confirm")) {
             long startTimeNanos = System.nanoTime();
-            log.info("confirmSeats request received for eventId={} bookingId={} requestedSeatCount={} confirmedAt={}",
+            log.info("confirmSeats request received for eventId={} bookingId={} requestedSeatCount={} confirmedAt={} idempotencyKey={}",
                     request.getEventId(),
                     request.getBookingId(),
                     request.getSeatIds() == null ? 0 : request.getSeatIds().size(),
-                    request.getConfirmedAt());
+                    request.getConfirmedAt(),
+                    idempotencyKey);
             SeatConfirmResponse response = new SeatConfirmResponse();
             try {
                 SeatsConfirmation confirmedSeatsCount = internalSeatsService.confirmSeats(
+                        idempotencyKey,
                         request.getEventId(),
                         request.getBookingId(),
+                        request.getPaymentId(),
                         request.getSeatIds(),
                         request.getConfirmedAt()
                 );
@@ -61,7 +69,7 @@ public class InternalSeatsController {
                 log.warn("confirmSeats failed: event not found for eventId={} bookingId={} reason={} latencyMs={}",
                         request.getEventId(), request.getBookingId(), e.getMessage(), latencyMs);
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
-            } catch (SeatsNotFoundException | SeatLockConflictException e) {
+            } catch (SeatsNotFoundException | SeatLockConflictException | IdempotencyConflictException e) {
                 response.setMessage(e.getMessage());
                 response.setStatus(ResponseStatus.FAILURE);
                 long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
@@ -73,17 +81,22 @@ public class InternalSeatsController {
     }
 
     @PostMapping("/release")
-    public ResponseEntity<ReleaseSeatsResponse> releaseSeats(@RequestBody @Valid ReleaseSeatsRequest request) {
+    public ResponseEntity<ReleaseSeatsResponse> releaseSeats(
+            @RequestHeader("X-Idempotency-Key") String idempotencyKey,
+            @RequestBody @Valid ReleaseSeatsRequest request
+    ) {
         try (MDC.MDCCloseable ignored = MDC.putCloseable("logGroup", "internal-seats-release")) {
             long startTimeNanos = System.nanoTime();
-            log.info("releaseSeats request received for eventId={} bookingId={} requestedSeatCount={} reason={}",
+            log.info("releaseSeats request received for eventId={} bookingId={} requestedSeatCount={} reason={} idempotencyKey={}",
                     request.getEventId(),
                     request.getBookingId(),
                     request.getSeatIds() == null ? 0 : request.getSeatIds().size(),
-                    request.getReason());
+                    request.getReason(),
+                    idempotencyKey);
             ReleaseSeatsResponse response = new ReleaseSeatsResponse();
             try {
                 ReleaseSeatsResult releaseResult = internalSeatsService.releaseSeats(
+                        idempotencyKey,
                         request.getEventId(),
                         request.getBookingId(),
                         request.getSeatIds(),
@@ -103,7 +116,7 @@ public class InternalSeatsController {
                 log.warn("releaseSeats failed: event not found for eventId={} bookingId={} reason={} latencyMs={}",
                         request.getEventId(), request.getBookingId(), e.getMessage(), latencyMs);
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
-            } catch (SeatsNotFoundException | SeatLockConflictException e) {
+            } catch (SeatsNotFoundException | SeatLockConflictException | IdempotencyConflictException e) {
                 response.setMessage(e.getMessage());
                 response.setStatus(ResponseStatus.FAILURE);
                 long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;

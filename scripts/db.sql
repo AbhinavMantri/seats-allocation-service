@@ -6,6 +6,8 @@ BEGIN;
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+SET search_path TO allocation_db;
+
 -- ---------------------------------------------------------
 -- 1) Event Inventory Context (one row per event)
 -- ---------------------------------------------------------
@@ -97,23 +99,23 @@ CREATE INDEX IF NOT EXISTS idx_event_seats_locked_by
   WHERE status = 'LOCKED';
 
 -- ---------------------------------------------------------
--- 4) Optional: Idempotency for lock requests (recommended)
+-- 4) Idempotency for retries across internal/public flows
 -- ---------------------------------------------------------
--- Helps avoid duplicate locks when client retries due to timeouts.
-CREATE TABLE IF NOT EXISTS lock_idempotency (
+-- Used for seat lock/confirm/release and inventory init replay.
+CREATE TABLE IF NOT EXISTS allocation_idempotency (
   id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  event_id           UUID NOT NULL,
-  user_id            UUID NOT NULL,
-  idempotency_key    VARCHAR(120) NOT NULL,
-  seat_ids_hash      VARCHAR(128) NOT NULL, -- hash of requested seatIds list
-  response_payload   JSONB NOT NULL,        -- cached response (lock expiry, seats)
-  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (event_id, user_id, idempotency_key)
+  operation_type    VARCHAR(40) NOT NULL,
+  resource_id       UUID NOT NULL,
+  idempotency_key   VARCHAR(120) NOT NULL,
+  payload_hash      VARCHAR(128) NOT NULL,
+  response_payload  JSONB NOT NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (operation_type, resource_id, idempotency_key)
 );
 
-CREATE INDEX IF NOT EXISTS idx_lock_idempotency_user
-  ON lock_idempotency(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_allocation_idempotency_operation_resource
+  ON allocation_idempotency(operation_type, resource_id, created_at DESC);
 
 COMMIT;
 

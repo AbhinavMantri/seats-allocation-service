@@ -4,6 +4,7 @@ import com.example.seats_allocation_service.config.InternalApiAccessInterceptor;
 import com.example.seats_allocation_service.dtos.ReleaseReason;
 import com.example.seats_allocation_service.dtos.ReleaseSeatsResult;
 import com.example.seats_allocation_service.dtos.SeatsConfirmation;
+import com.example.seats_allocation_service.exceptions.IdempotencyConflictException;
 import com.example.seats_allocation_service.exceptions.SeatLockConflictException;
 import com.example.seats_allocation_service.service.InternalSeatsService;
 import com.example.seats_allocation_service.service.JWTService;
@@ -59,15 +60,17 @@ class InternalSeatsControllerApiTest {
 
     @Test
     void confirmSeatsApi_whenAuthorizedAndSuccessful_returnsPayload() throws Exception {
+        String idempotencyKey = "idem-confirm";
         UUID eventId = UUID.randomUUID();
         UUID bookingId = UUID.randomUUID();
         UUID paymentId = UUID.randomUUID();
         UUID seatId = UUID.randomUUID();
         Instant confirmedAt = Instant.parse("2026-03-21T12:00:00Z");
-        when(internalSeatsService.confirmSeats(eventId, bookingId, List.of(seatId), confirmedAt))
+        when(internalSeatsService.confirmSeats(idempotencyKey, eventId, bookingId, paymentId, List.of(seatId), confirmedAt))
                 .thenReturn(SeatsConfirmation.builder()
                         .eventId(eventId)
                         .bookingId(bookingId)
+                        .paymentId(paymentId)
                         .seatIds(List.of(seatId))
                         .bookedCount(1)
                         .confirmedAt(confirmedAt.toString())
@@ -87,6 +90,7 @@ class InternalSeatsControllerApiTest {
                         .header(InternalApiAccessInterceptor.HEADER_SERVICE_NAME, "inventory-service")
                         .header(InternalApiAccessInterceptor.HEADER_SERVICE_TOKEN, "svc-token")
                         .header(InternalApiAccessInterceptor.HEADER_AUTHORIZATION, "Bearer " + jwtWithRole("ADMIN"))
+                        .header("X-Idempotency-Key", idempotencyKey)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestJson))
                 .andExpect(status().isOk())
@@ -99,6 +103,7 @@ class InternalSeatsControllerApiTest {
 
     @Test
     void releaseSeatsApi_whenAuthorizedAndSuccessful_returnsPayload() throws Exception {
+        String idempotencyKey = "idem-release";
         UUID eventId = UUID.randomUUID();
         UUID bookingId = UUID.randomUUID();
         UUID seatId = UUID.randomUUID();
@@ -108,6 +113,7 @@ class InternalSeatsControllerApiTest {
         result.setSeatIds(List.of(seatId));
         result.setReleasedCount(1);
         when(internalSeatsService.releaseSeats(
+                idempotencyKey,
                 eventId.toString(),
                 bookingId.toString(),
                 List.of(seatId.toString()),
@@ -127,6 +133,7 @@ class InternalSeatsControllerApiTest {
                         .header(InternalApiAccessInterceptor.HEADER_SERVICE_NAME, "inventory-service")
                         .header(InternalApiAccessInterceptor.HEADER_SERVICE_TOKEN, "svc-token")
                         .header(InternalApiAccessInterceptor.HEADER_AUTHORIZATION, "Bearer " + jwtWithRole("ADMIN"))
+                        .header("X-Idempotency-Key", idempotencyKey)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestJson))
                 .andExpect(status().isOk())
@@ -139,10 +146,12 @@ class InternalSeatsControllerApiTest {
 
     @Test
     void releaseSeatsApi_whenServiceRejectsRequest_returnsConflict() throws Exception {
+        String idempotencyKey = "idem-release";
         UUID eventId = UUID.randomUUID();
         UUID bookingId = UUID.randomUUID();
         UUID seatId = UUID.randomUUID();
         when(internalSeatsService.releaseSeats(
+                idempotencyKey,
                 eventId.toString(),
                 bookingId.toString(),
                 List.of(seatId.toString()),
@@ -162,11 +171,45 @@ class InternalSeatsControllerApiTest {
                         .header(InternalApiAccessInterceptor.HEADER_SERVICE_NAME, "inventory-service")
                         .header(InternalApiAccessInterceptor.HEADER_SERVICE_TOKEN, "svc-token")
                         .header(InternalApiAccessInterceptor.HEADER_AUTHORIZATION, "Bearer " + jwtWithRole("ADMIN"))
+                        .header("X-Idempotency-Key", idempotencyKey)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestJson))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.status").value("FAILURE"))
                 .andExpect(jsonPath("$.message").value("seat not releasable"));
+    }
+
+    @Test
+    void confirmSeatsApi_whenIdempotencyKeyConflicts_returnsConflict() throws Exception {
+        String idempotencyKey = "idem-confirm";
+        UUID eventId = UUID.randomUUID();
+        UUID bookingId = UUID.randomUUID();
+        UUID paymentId = UUID.randomUUID();
+        UUID seatId = UUID.randomUUID();
+        Instant confirmedAt = Instant.parse("2026-03-21T12:00:00Z");
+        when(internalSeatsService.confirmSeats(idempotencyKey, eventId, bookingId, paymentId, List.of(seatId), confirmedAt))
+                .thenThrow(new IdempotencyConflictException("idempotency key conflict"));
+
+        String requestJson = """
+                {
+                  "eventId": "%s",
+                  "bookingId": "%s",
+                  "paymentId": "%s",
+                  "seatIds": ["%s"],
+                  "confirmedAt": "%s"
+                }
+                """.formatted(eventId, bookingId, paymentId, seatId, confirmedAt);
+
+        mockMvc.perform(post("/internal/seats/confirm")
+                        .header(InternalApiAccessInterceptor.HEADER_SERVICE_NAME, "inventory-service")
+                        .header(InternalApiAccessInterceptor.HEADER_SERVICE_TOKEN, "svc-token")
+                        .header(InternalApiAccessInterceptor.HEADER_AUTHORIZATION, "Bearer " + jwtWithRole("ADMIN"))
+                        .header("X-Idempotency-Key", idempotencyKey)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestJson))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value("FAILURE"))
+                .andExpect(jsonPath("$.message").value("idempotency key conflict"));
     }
 
     @Test

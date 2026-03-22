@@ -5,11 +5,11 @@ import com.example.seats_allocation_service.dtos.SeatAvailabilityResponse;
 import com.example.seats_allocation_service.exceptions.EventNotFoundException;
 import com.example.seats_allocation_service.exceptions.SeatLockConflictException;
 import com.example.seats_allocation_service.exceptions.SeatsNotFoundException;
+import com.example.seats_allocation_service.models.AllocationIdempotency;
 import com.example.seats_allocation_service.models.EventSeat;
-import com.example.seats_allocation_service.models.LockIdempotency;
+import com.example.seats_allocation_service.repository.AllocationIdempotencyRepository;
 import com.example.seats_allocation_service.repository.EventInventoryContextRepository;
 import com.example.seats_allocation_service.repository.EventSeatRepository;
-import com.example.seats_allocation_service.repository.LockIdempotencyRepository;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -38,6 +38,7 @@ import java.util.stream.Collectors;
 @Service
 @Slf4j
 public class EventSeatService {
+    private static final String OPERATION_SEAT_LOCK = "SEAT_LOCK";
     private static final String EVENT_SEATS_CACHE_KEY_PREFIX = "event:seats:";
     private static final Duration EVENT_SEATS_CACHE_TTL = Duration.ofMinutes(5);
     private static final Duration LOCK_TTL = Duration.ofMinutes(10);
@@ -46,7 +47,7 @@ public class EventSeatService {
 
     private final EventSeatRepository eventSeatRepository;
     private final EventInventoryContextRepository eventInventoryContextRepository;
-    private final LockIdempotencyRepository lockIdempotencyRepository;
+    private final AllocationIdempotencyRepository allocationIdempotencyRepository;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
 
@@ -54,13 +55,13 @@ public class EventSeatService {
     public EventSeatService(
             EventSeatRepository eventSeatRepository,
             EventInventoryContextRepository eventInventoryContextRepository,
-            LockIdempotencyRepository lockIdempotencyRepository,
+            AllocationIdempotencyRepository allocationIdempotencyRepository,
             StringRedisTemplate stringRedisTemplate,
             ObjectMapper objectMapper
     ) {
         this.eventSeatRepository = eventSeatRepository;
         this.eventInventoryContextRepository = eventInventoryContextRepository;
-        this.lockIdempotencyRepository = lockIdempotencyRepository;
+        this.allocationIdempotencyRepository = allocationIdempotencyRepository;
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
     }
@@ -170,6 +171,7 @@ public class EventSeatService {
         List<UUID> normalizedSeatIds = new ArrayList<>(new LinkedHashSet<>(seatIds));
         String seatIdsHash = hashSeatIds(normalizedSeatIds);
         String cacheKey = cacheKey(eventId, userId, idempotencyKey);
+        String internalIdempotencyKey = internalLockIdempotencyKey(userId, idempotencyKey);
 
         // Fast idempotency replay path via Redis cache.
         Optional<String> cachedRedisResponseMessage = readCachedResponseMessage(cacheKey);
@@ -181,12 +183,12 @@ public class EventSeatService {
         }
 
         // Durable idempotency check in DB for (eventId, userId, idempotencyKey).
-        Optional<LockIdempotency> existingIdempotency =
-                lockIdempotencyRepository.findByEventIdAndUserIdAndIdempotencyKey(eventId, userId, idempotencyKey);
+        Optional<AllocationIdempotency> existingIdempotency =
+                allocationIdempotencyRepository.findByOperationTypeAndResourceIdAndIdempotencyKey(OPERATION_SEAT_LOCK, eventId, internalIdempotencyKey);
         if (existingIdempotency.isPresent()) {
-            LockIdempotency idempotency = existingIdempotency.get();
+            AllocationIdempotency idempotency = existingIdempotency.get();
             // Same key with different seat list is a request conflict.
-            if (!idempotency.getSeatIdsHash().equals(seatIdsHash)) {
+            if (!idempotency.getPayloadHash().equals(seatIdsHash)) {
                 log.warn("lockSeats service idempotency key conflict for eventId={} userId={} idempotencyKey={}",
                         eventId, userId, idempotencyKey);
                 throw new SeatLockConflictException("idempotencyKey was already used with a different seat list");
@@ -241,22 +243,22 @@ public class EventSeatService {
         String successMessage = "Locked " + seats.size() + " seat(s) until " + lockExpiresAt;
         String responsePayload = serializeSuccessfulResponsePayload(successMessage);
 
-        LockIdempotency idempotency = new LockIdempotency();
-        idempotency.setEventId(eventId);
-        idempotency.setUserId(userId);
-        idempotency.setIdempotencyKey(idempotencyKey);
-        idempotency.setSeatIdsHash(seatIdsHash);
+        AllocationIdempotency idempotency = new AllocationIdempotency();
+        idempotency.setOperationType(OPERATION_SEAT_LOCK);
+        idempotency.setResourceId(eventId);
+        idempotency.setIdempotencyKey(internalIdempotencyKey);
+        idempotency.setPayloadHash(seatIdsHash);
         idempotency.setResponsePayload(responsePayload);
         try {
             // Save idempotency outcome so retries can be replayed safely.
-            lockIdempotencyRepository.save(idempotency);
+            allocationIdempotencyRepository.save(idempotency);
         } catch (DataIntegrityViolationException ex) {
             // Handle race where another request with same key inserted first.
-            Optional<LockIdempotency> existingAfterRace =
-                    lockIdempotencyRepository.findByEventIdAndUserIdAndIdempotencyKey(eventId, userId, idempotencyKey);
+            Optional<AllocationIdempotency> existingAfterRace =
+                    allocationIdempotencyRepository.findByOperationTypeAndResourceIdAndIdempotencyKey(OPERATION_SEAT_LOCK, eventId, internalIdempotencyKey);
             if (existingAfterRace.isPresent()) {
-                LockIdempotency existing = existingAfterRace.get();
-                if (!existing.getSeatIdsHash().equals(seatIdsHash)) {
+                AllocationIdempotency existing = existingAfterRace.get();
+                if (!existing.getPayloadHash().equals(seatIdsHash)) {
                     log.warn("lockSeats service idempotency race conflict for eventId={} userId={} idempotencyKey={}",
                             eventId, userId, idempotencyKey);
                     throw new SeatLockConflictException("idempotencyKey was already used with a different seat list");
@@ -321,6 +323,10 @@ public class EventSeatService {
 
     private String cacheKey(UUID eventId, UUID userId, String idempotencyKey) {
         return LOCK_RESPONSE_CACHE_KEY_PREFIX + eventId + ":" + userId + ":" + idempotencyKey;
+    }
+
+    private String internalLockIdempotencyKey(UUID userId, String idempotencyKey) {
+        return userId + ":" + idempotencyKey;
     }
 
     private Optional<String> readCachedResponseMessage(String cacheKey) {

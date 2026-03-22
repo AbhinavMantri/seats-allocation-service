@@ -3,35 +3,71 @@ package com.example.seats_allocation_service.service;
 import com.example.seats_allocation_service.dtos.ReleaseReason;
 import com.example.seats_allocation_service.dtos.ReleaseSeatsResult;
 import com.example.seats_allocation_service.dtos.SeatsConfirmation;
+import com.example.seats_allocation_service.exceptions.IdempotencyConflictException;
 import com.example.seats_allocation_service.exceptions.EventNotFoundException;
 import com.example.seats_allocation_service.exceptions.SeatLockConflictException;
 import com.example.seats_allocation_service.exceptions.SeatsNotFoundException;
+import com.example.seats_allocation_service.models.AllocationIdempotency;
 import com.example.seats_allocation_service.models.EventSeat;
+import com.example.seats_allocation_service.repository.AllocationIdempotencyRepository;
 import com.example.seats_allocation_service.repository.EventInventoryContextRepository;
 import com.example.seats_allocation_service.repository.EventSeatRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.ObjectMapper;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class InternalSeatsService {
+    private static final String OPERATION_SEAT_CONFIRM = "SEAT_CONFIRM";
+    private static final String OPERATION_SEAT_RELEASE = "SEAT_RELEASE";
+    private static final Duration IDEMPOTENCY_RESPONSE_CACHE_TTL = Duration.ofHours(1);
+    private static final String CONFIRM_RESPONSE_CACHE_KEY_PREFIX = "internal:seats:confirm:response:";
+    private static final String RELEASE_RESPONSE_CACHE_KEY_PREFIX = "internal:seats:release:response:";
     private final EventSeatRepository eventSeatRepository;
     private final EventInventoryContextRepository eventInventoryContextRepository;
+    private final AllocationIdempotencyRepository allocationIdempotencyRepository;
+    private final StringRedisTemplate stringRedisTemplate;
+    private final ObjectMapper objectMapper;
 
     @Transactional
-    public SeatsConfirmation confirmSeats(UUID eventId, UUID bookingId, List<UUID> seatIds, Instant confirmedAt) {
+    public SeatsConfirmation confirmSeats(String idempotencyKey, UUID eventId, UUID bookingId, UUID paymentId, List<UUID> seatIds, Instant confirmedAt) {
         try (MDC.MDCCloseable ignored = MDC.putCloseable("logGroup", "internal-seats-confirm")) {
             long startTimeNanos = System.nanoTime();
-            log.info("confirmSeats service started for eventId={} bookingId={} inputSeatCount={} confirmedAt={}",
-                    eventId, bookingId, seatIds == null ? 0 : seatIds.size(), confirmedAt);
+            log.info("confirmSeats service started for eventId={} bookingId={} inputSeatCount={} confirmedAt={} idempotencyKey={}",
+                    eventId, bookingId, seatIds == null ? 0 : seatIds.size(), confirmedAt, idempotencyKey);
+            String payloadHash = hashPayload(eventId, bookingId, paymentId, seatIds, confirmedAt);
+            String cacheKey = cacheKey(CONFIRM_RESPONSE_CACHE_KEY_PREFIX, eventId, idempotencyKey);
+            SeatsConfirmation redisReplay = readCachedResponse(cacheKey, payloadHash, SeatsConfirmation.class);
+            if (redisReplay != null) {
+                long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
+                log.info("confirmSeats service replayed redis response for eventId={} bookingId={} idempotencyKey={} latencyMs={}",
+                        eventId, bookingId, idempotencyKey, latencyMs);
+                return redisReplay;
+            }
+            SeatsConfirmation replay = readIdempotentResponse(OPERATION_SEAT_CONFIRM, eventId, idempotencyKey, payloadHash, SeatsConfirmation.class);
+            if (replay != null) {
+                cacheResponsePayload(cacheKey, payloadHash, writeResponse(replay));
+                long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
+                log.info("confirmSeats service replayed idempotent response for eventId={} bookingId={} idempotencyKey={} latencyMs={}",
+                        eventId, bookingId, idempotencyKey, latencyMs);
+                return replay;
+            }
+
             List<EventSeat> seatsToConfirm = eventSeatRepository.findForUpdateByEventIdAndIds(eventId, seatIds);
 
             if (seatsToConfirm.isEmpty()) {
@@ -77,10 +113,12 @@ public class InternalSeatsService {
             SeatsConfirmation result = SeatsConfirmation.builder()
                     .eventId(eventId)
                     .bookingId(bookingId)
+                    .paymentId(paymentId)
                     .seatIds(seatIds)
                     .bookedCount(seatsToConfirm.size())
                     .confirmedAt(confirmedAt.toString())
                     .build();
+            cacheIdempotentResponse(OPERATION_SEAT_CONFIRM, eventId, idempotencyKey, payloadHash, cacheKey, result);
             long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
             log.info("confirmSeats service completed for eventId={} bookingId={} bookedCount={} latencyMs={}",
                     eventId, bookingId, result.getBookedCount(), latencyMs);
@@ -89,7 +127,7 @@ public class InternalSeatsService {
     }
 
     @Transactional
-    public ReleaseSeatsResult releaseSeats(String eventId, String bookingId, List<String> seatIds, ReleaseReason reason) {
+    public ReleaseSeatsResult releaseSeats(String idempotencyKey, String eventId, String bookingId, List<String> seatIds, ReleaseReason reason) {
         try (MDC.MDCCloseable ignored = MDC.putCloseable("logGroup", "internal-seats-release")) {
             long startTimeNanos = System.nanoTime();
             UUID parsedEventId = UUID.fromString(eventId);
@@ -97,8 +135,25 @@ public class InternalSeatsService {
             List<UUID> parsedSeatIds = seatIds.stream()
                     .map(UUID::fromString)
                     .toList();
-            log.info("releaseSeats service started for eventId={} bookingId={} inputSeatCount={} reason={}",
-                    parsedEventId, parsedBookingId, parsedSeatIds.size(), reason);
+            log.info("releaseSeats service started for eventId={} bookingId={} inputSeatCount={} reason={} idempotencyKey={}",
+                    parsedEventId, parsedBookingId, parsedSeatIds.size(), reason, idempotencyKey);
+            String payloadHash = hashPayload(parsedEventId, parsedBookingId, parsedSeatIds, reason);
+            String cacheKey = cacheKey(RELEASE_RESPONSE_CACHE_KEY_PREFIX, parsedEventId, idempotencyKey);
+            ReleaseSeatsResult redisReplay = readCachedResponse(cacheKey, payloadHash, ReleaseSeatsResult.class);
+            if (redisReplay != null) {
+                long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
+                log.info("releaseSeats service replayed redis response for eventId={} bookingId={} idempotencyKey={} latencyMs={}",
+                        parsedEventId, parsedBookingId, idempotencyKey, latencyMs);
+                return redisReplay;
+            }
+            ReleaseSeatsResult replay = readIdempotentResponse(OPERATION_SEAT_RELEASE, parsedEventId, idempotencyKey, payloadHash, ReleaseSeatsResult.class);
+            if (replay != null) {
+                cacheResponsePayload(cacheKey, payloadHash, writeResponse(replay));
+                long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
+                log.info("releaseSeats service replayed idempotent response for eventId={} bookingId={} idempotencyKey={} latencyMs={}",
+                        parsedEventId, parsedBookingId, idempotencyKey, latencyMs);
+                return replay;
+            }
 
             List<EventSeat> seatsToRelease = eventSeatRepository.findForUpdateByEventIdAndIds(parsedEventId, parsedSeatIds);
 
@@ -150,10 +205,112 @@ public class InternalSeatsService {
             result.setBookingId(parsedBookingId);
             result.setSeatIds(parsedSeatIds);
             result.setReleasedCount(seatsToRelease.size());
+            cacheIdempotentResponse(OPERATION_SEAT_RELEASE, parsedEventId, idempotencyKey, payloadHash, cacheKey, result);
             long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
             log.info("releaseSeats service completed for eventId={} bookingId={} releasedCount={} reason={} latencyMs={}",
                     parsedEventId, parsedBookingId, result.getReleasedCount(), reason, latencyMs);
             return result;
         }
+    }
+
+    private void cacheIdempotentResponse(String operationType, UUID resourceId, String idempotencyKey, String payloadHash, String cacheKey, Object response) {
+        String responsePayload = writeResponse(response);
+        AllocationIdempotency idempotency = new AllocationIdempotency();
+        idempotency.setOperationType(operationType);
+        idempotency.setResourceId(resourceId);
+        idempotency.setIdempotencyKey(idempotencyKey);
+        idempotency.setPayloadHash(payloadHash);
+        idempotency.setResponsePayload(responsePayload);
+        try {
+            allocationIdempotencyRepository.save(idempotency);
+        } catch (DataIntegrityViolationException ex) {
+            log.info("Idempotency record already persisted for operationType={} resourceId={} idempotencyKey={}",
+                    operationType, resourceId, idempotencyKey);
+        }
+        cacheResponsePayload(cacheKey, payloadHash, responsePayload);
+    }
+
+    private <T> T readIdempotentResponse(String operationType, UUID resourceId, String idempotencyKey, String payloadHash, Class<T> responseType) {
+        AllocationIdempotency existing = allocationIdempotencyRepository
+                .findByOperationTypeAndResourceIdAndIdempotencyKey(operationType, resourceId, idempotencyKey)
+                .orElse(null);
+        if (existing == null) {
+            return null;
+        }
+        if (!existing.getPayloadHash().equals(payloadHash)) {
+            throw new IdempotencyConflictException("idempotencyKey was already used with a different payload");
+        }
+        try {
+            return objectMapper.readValue(existing.getResponsePayload(), responseType);
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to deserialize idempotent response", e);
+        }
+    }
+
+    private <T> T readCachedResponse(String cacheKey, String payloadHash, Class<T> responseType) {
+        try {
+            String cachedPayload = stringRedisTemplate.opsForValue().get(cacheKey);
+            if (cachedPayload == null) {
+                return null;
+            }
+            CachedIdempotentResponse cached = objectMapper.readValue(cachedPayload, CachedIdempotentResponse.class);
+            if (!cached.payloadHash().equals(payloadHash)) {
+                throw new IdempotencyConflictException("idempotencyKey was already used with a different payload");
+            }
+            return objectMapper.readValue(cached.responsePayload(), responseType);
+        } catch (IdempotencyConflictException e) {
+            throw e;
+        } catch (Exception e) {
+            log.debug("internal-seats redis read failed for key={}", cacheKey, e);
+            return null;
+        }
+    }
+
+    private void cacheResponsePayload(String cacheKey, String payloadHash, String responsePayload) {
+        try {
+            stringRedisTemplate.opsForValue().set(
+                    cacheKey,
+                    objectMapper.writeValueAsString(new CachedIdempotentResponse(payloadHash, responsePayload)),
+                    IDEMPOTENCY_RESPONSE_CACHE_TTL
+            );
+        } catch (Exception e) {
+            log.debug("internal-seats redis write failed for key={}", cacheKey, e);
+        }
+    }
+
+    private String writeResponse(Object response) {
+        try {
+            return objectMapper.writeValueAsString(response);
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to serialize idempotent response", e);
+        }
+    }
+
+    private String hashPayload(Object... values) {
+        StringBuilder canonical = new StringBuilder();
+        for (Object value : values) {
+            if (canonical.length() > 0) {
+                canonical.append('|');
+            }
+            canonical.append(value == null ? "null" : value.toString());
+        }
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] bytes = digest.digest(canonical.toString().getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(bytes.length * 2);
+            for (byte b : bytes) {
+                sb.append(String.format(Locale.ROOT, "%02x", b));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to hash idempotency payload", e);
+        }
+    }
+
+    private String cacheKey(String prefix, UUID eventId, String idempotencyKey) {
+        return prefix + eventId + ":" + idempotencyKey;
+    }
+
+    private record CachedIdempotentResponse(String payloadHash, String responsePayload) {
     }
 }

@@ -9,6 +9,7 @@ import com.example.seats_allocation_service.dtos.SeatConfirmResponse;
 import com.example.seats_allocation_service.dtos.SeatsConfirmation;
 import com.example.seats_allocation_service.dtos.common.ResponseStatus;
 import com.example.seats_allocation_service.exceptions.EventNotFoundException;
+import com.example.seats_allocation_service.exceptions.IdempotencyConflictException;
 import com.example.seats_allocation_service.exceptions.SeatLockConflictException;
 import com.example.seats_allocation_service.service.InternalSeatsService;
 import org.junit.jupiter.api.Test;
@@ -39,22 +40,26 @@ class InternalSeatsControllerTest {
 
     @Test
     void confirmSeats_whenSuccessful_returnsOkResponse() {
+        String idempotencyKey = "idem-confirm";
         SeatConfirmRequest request = confirmRequest();
         SeatsConfirmation confirmation = SeatsConfirmation.builder()
                 .eventId(request.getEventId())
                 .bookingId(request.getBookingId())
+                .paymentId(request.getPaymentId())
                 .seatIds(request.getSeatIds())
                 .bookedCount(request.getSeatIds().size())
                 .confirmedAt(request.getConfirmedAt().toString())
                 .build();
         when(internalSeatsService.confirmSeats(
+                idempotencyKey,
                 request.getEventId(),
                 request.getBookingId(),
+                request.getPaymentId(),
                 request.getSeatIds(),
                 request.getConfirmedAt()
         )).thenReturn(confirmation);
 
-        ResponseEntity<SeatConfirmResponse> response = internalSeatsController.confirmSeats(request);
+        ResponseEntity<SeatConfirmResponse> response = internalSeatsController.confirmSeats(idempotencyKey, request);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
@@ -65,15 +70,18 @@ class InternalSeatsControllerTest {
 
     @Test
     void confirmSeats_whenEventMissing_returnsNotFound() {
+        String idempotencyKey = "idem-confirm";
         SeatConfirmRequest request = confirmRequest();
         when(internalSeatsService.confirmSeats(
+                idempotencyKey,
                 request.getEventId(),
                 request.getBookingId(),
+                request.getPaymentId(),
                 request.getSeatIds(),
                 request.getConfirmedAt()
         )).thenThrow(new EventNotFoundException("missing event"));
 
-        ResponseEntity<SeatConfirmResponse> response = internalSeatsController.confirmSeats(request);
+        ResponseEntity<SeatConfirmResponse> response = internalSeatsController.confirmSeats(idempotencyKey, request);
 
         assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
         assertNotNull(response.getBody());
@@ -83,6 +91,7 @@ class InternalSeatsControllerTest {
 
     @Test
     void releaseSeats_whenSuccessful_returnsOkResponse() {
+        String idempotencyKey = "idem-release";
         ReleaseSeatsRequest request = releaseRequest();
         ReleaseSeatsResult result = new ReleaseSeatsResult();
         result.setEventId(UUID.fromString(request.getEventId()));
@@ -90,13 +99,14 @@ class InternalSeatsControllerTest {
         result.setSeatIds(request.getSeatIds().stream().map(UUID::fromString).toList());
         result.setReleasedCount(request.getSeatIds().size());
         when(internalSeatsService.releaseSeats(
+                idempotencyKey,
                 request.getEventId(),
                 request.getBookingId(),
                 request.getSeatIds(),
                 request.getReason()
         )).thenReturn(result);
 
-        ResponseEntity<ReleaseSeatsResponse> response = internalSeatsController.releaseSeats(request);
+        ResponseEntity<ReleaseSeatsResponse> response = internalSeatsController.releaseSeats(idempotencyKey, request);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
@@ -107,26 +117,50 @@ class InternalSeatsControllerTest {
 
     @Test
     void releaseSeats_whenConflict_returnsConflict() {
+        String idempotencyKey = "idem-release";
         ReleaseSeatsRequest request = releaseRequest();
         when(internalSeatsService.releaseSeats(
+                idempotencyKey,
                 request.getEventId(),
                 request.getBookingId(),
                 request.getSeatIds(),
                 request.getReason()
         )).thenThrow(new SeatLockConflictException("seat not releasable"));
 
-        ResponseEntity<ReleaseSeatsResponse> response = internalSeatsController.releaseSeats(request);
+        ResponseEntity<ReleaseSeatsResponse> response = internalSeatsController.releaseSeats(idempotencyKey, request);
 
         assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
         assertNotNull(response.getBody());
         assertEquals(ResponseStatus.FAILURE, response.getBody().getStatus());
         assertEquals("seat not releasable", response.getBody().getMessage());
         verify(internalSeatsService).releaseSeats(
+                idempotencyKey,
                 request.getEventId(),
                 request.getBookingId(),
                 request.getSeatIds(),
                 request.getReason()
         );
+    }
+
+    @Test
+    void confirmSeats_whenIdempotencyKeyConflicts_returnsConflict() {
+        String idempotencyKey = "idem-confirm";
+        SeatConfirmRequest request = confirmRequest();
+        when(internalSeatsService.confirmSeats(
+                idempotencyKey,
+                request.getEventId(),
+                request.getBookingId(),
+                request.getPaymentId(),
+                request.getSeatIds(),
+                request.getConfirmedAt()
+        )).thenThrow(new IdempotencyConflictException("idempotency key conflict"));
+
+        ResponseEntity<SeatConfirmResponse> response = internalSeatsController.confirmSeats(idempotencyKey, request);
+
+        assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(ResponseStatus.FAILURE, response.getBody().getStatus());
+        assertEquals("idempotency key conflict", response.getBody().getMessage());
     }
 
     private SeatConfirmRequest confirmRequest() {

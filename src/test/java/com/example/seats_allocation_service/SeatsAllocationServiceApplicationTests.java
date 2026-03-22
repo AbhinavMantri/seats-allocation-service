@@ -1,5 +1,6 @@
 package com.example.seats_allocation_service;
 
+import com.example.seats_allocation_service.repository.AllocationIdempotencyRepository;
 import com.example.seats_allocation_service.repository.EventInventoryContextRepository;
 import com.example.seats_allocation_service.repository.EventSeatRepository;
 import com.example.seats_allocation_service.service.EventInventoryService;
@@ -28,6 +29,9 @@ class SeatsAllocationServiceApplicationTests {
 
 	@MockitoBean
 	EventInventoryContextRepository eventInventoryContextRepository;
+
+	@MockitoBean
+	AllocationIdempotencyRepository allocationIdempotencyRepository;
 
 	@MockitoBean
 	KafkaTemplate<String, String> kafkaTemplate;

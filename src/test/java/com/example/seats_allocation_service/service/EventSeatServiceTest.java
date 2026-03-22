@@ -3,11 +3,11 @@ package com.example.seats_allocation_service.service;
 import com.example.seats_allocation_service.exceptions.EventNotFoundException;
 import com.example.seats_allocation_service.exceptions.SeatLockConflictException;
 import com.example.seats_allocation_service.exceptions.SeatsNotFoundException;
+import com.example.seats_allocation_service.models.AllocationIdempotency;
 import com.example.seats_allocation_service.models.EventSeat;
-import com.example.seats_allocation_service.models.LockIdempotency;
+import com.example.seats_allocation_service.repository.AllocationIdempotencyRepository;
 import com.example.seats_allocation_service.repository.EventInventoryContextRepository;
 import com.example.seats_allocation_service.repository.EventSeatRepository;
-import com.example.seats_allocation_service.repository.LockIdempotencyRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -48,7 +48,7 @@ class EventSeatServiceTest {
     private EventInventoryContextRepository eventInventoryContextRepository;
 
     @Mock
-    private LockIdempotencyRepository lockIdempotencyRepository;
+    private AllocationIdempotencyRepository allocationIdempotencyRepository;
 
     @Mock
     private StringRedisTemplate stringRedisTemplate;
@@ -64,7 +64,7 @@ class EventSeatServiceTest {
         eventSeatService = new EventSeatService(
                 eventSeatRepository,
                 eventInventoryContextRepository,
-                lockIdempotencyRepository,
+                allocationIdempotencyRepository,
                 stringRedisTemplate,
                 new ObjectMapper()
         );
@@ -132,7 +132,7 @@ class EventSeatServiceTest {
 
         assertDoesNotThrow(() -> eventSeatService.lockSeats(eventId, "idem", userId, List.of(UUID.randomUUID())));
 
-        verify(lockIdempotencyRepository, never()).findByEventIdAndUserIdAndIdempotencyKey(any(), any(), any());
+        verify(allocationIdempotencyRepository, never()).findByOperationTypeAndResourceIdAndIdempotencyKey(anyString(), any(), anyString());
         verify(eventSeatRepository, never()).findForUpdateByEventIdAndIds(any(), any());
     }
 
@@ -142,9 +142,9 @@ class EventSeatServiceTest {
         UUID userId = UUID.randomUUID();
         UUID seatId = UUID.randomUUID();
         when(valueOperations.get(anyString())).thenReturn(null);
-        LockIdempotency idempotency = new LockIdempotency();
-        idempotency.setSeatIdsHash("different-hash");
-        when(lockIdempotencyRepository.findByEventIdAndUserIdAndIdempotencyKey(eventId, userId, "idem"))
+        AllocationIdempotency idempotency = new AllocationIdempotency();
+        idempotency.setPayloadHash("different-hash");
+        when(allocationIdempotencyRepository.findByOperationTypeAndResourceIdAndIdempotencyKey("SEAT_LOCK", eventId, userId + ":idem"))
                 .thenReturn(Optional.of(idempotency));
 
         assertThrows(
@@ -160,7 +160,7 @@ class EventSeatServiceTest {
         UUID otherUserId = UUID.randomUUID();
         UUID seatId = UUID.randomUUID();
         when(valueOperations.get(anyString())).thenReturn(null);
-        when(lockIdempotencyRepository.findByEventIdAndUserIdAndIdempotencyKey(eventId, userId, "idem"))
+        when(allocationIdempotencyRepository.findByOperationTypeAndResourceIdAndIdempotencyKey("SEAT_LOCK", eventId, userId + ":idem"))
                 .thenReturn(Optional.empty());
         EventSeat seat = seat(eventId, seatId, EventSeat.SeatStatus.LOCKED);
         seat.setLockedBy(otherUserId);
@@ -179,7 +179,7 @@ class EventSeatServiceTest {
         UUID userId = UUID.randomUUID();
         UUID seatId = UUID.randomUUID();
         when(valueOperations.get(anyString())).thenReturn(null);
-        when(lockIdempotencyRepository.findByEventIdAndUserIdAndIdempotencyKey(eventId, userId, "idem"))
+        when(allocationIdempotencyRepository.findByOperationTypeAndResourceIdAndIdempotencyKey("SEAT_LOCK", eventId, userId + ":idem"))
                 .thenReturn(Optional.empty());
         EventSeat seat = seat(eventId, seatId, EventSeat.SeatStatus.AVAILABLE);
         when(eventSeatRepository.findForUpdateByEventIdAndIds(eventId, List.of(seatId))).thenReturn(List.of(seat));
@@ -192,11 +192,11 @@ class EventSeatServiceTest {
         assertNotNull(seat.getLockExpiresAt());
         verify(eventSeatRepository).saveAll(List.of(seat));
 
-        ArgumentCaptor<LockIdempotency> captor = ArgumentCaptor.forClass(LockIdempotency.class);
-        verify(lockIdempotencyRepository).save(captor.capture());
-        assertEquals(eventId, captor.getValue().getEventId());
-        assertEquals(userId, captor.getValue().getUserId());
-        assertEquals("idem", captor.getValue().getIdempotencyKey());
+        ArgumentCaptor<AllocationIdempotency> captor = ArgumentCaptor.forClass(AllocationIdempotency.class);
+        verify(allocationIdempotencyRepository).save(captor.capture());
+        assertEquals("SEAT_LOCK", captor.getValue().getOperationType());
+        assertEquals(eventId, captor.getValue().getResourceId());
+        assertEquals(userId + ":idem", captor.getValue().getIdempotencyKey());
         assertNotNull(captor.getValue().getResponsePayload());
     }
 
