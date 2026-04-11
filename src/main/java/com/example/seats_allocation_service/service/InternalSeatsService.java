@@ -38,11 +38,16 @@ public class InternalSeatsService {
     private static final Duration IDEMPOTENCY_RESPONSE_CACHE_TTL = Duration.ofHours(1);
     private static final String CONFIRM_RESPONSE_CACHE_KEY_PREFIX = "internal:seats:confirm:response:";
     private static final String RELEASE_RESPONSE_CACHE_KEY_PREFIX = "internal:seats:release:response:";
+    private final EventSeatService eventSeatService;
     private final EventSeatRepository eventSeatRepository;
     private final EventInventoryContextRepository eventInventoryContextRepository;
     private final AllocationIdempotencyRepository allocationIdempotencyRepository;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
+
+    public void lockSeats(UUID eventId, String idempotencyKey, UUID userId, List<UUID> seatIds) {
+        eventSeatService.lockSeats(eventId, idempotencyKey, userId, seatIds);
+    }
 
     @Transactional
     public SeatsConfirmation confirmSeats(String idempotencyKey, UUID eventId, UUID bookingId, UUID paymentId, List<UUID> seatIds, Instant confirmedAt) {
@@ -211,6 +216,10 @@ public class InternalSeatsService {
                     parsedEventId, parsedBookingId, result.getReleasedCount(), reason, latencyMs);
             return result;
         }
+    }
+
+    public int releaseLocks(UUID eventId, UUID userId, List<UUID> seatIds) {
+        return eventSeatService.releaseLocks(eventId, userId, seatIds);
     }
 
     private void cacheIdempotentResponse(String operationType, UUID resourceId, String idempotencyKey, String payloadHash, String cacheKey, Object response) {

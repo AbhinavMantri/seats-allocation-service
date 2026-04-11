@@ -25,15 +25,15 @@ public class InternalEventInventoryController {
     private final EventSeatService eventSeatService;
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
-    @Value("${app.kafka.topics.inventory-init-result:inventory-init.v1}")
+    @Value("${app.kafka.topics.inventory-init-result:inventory-published.v1}")
     private String inventoryInitResultTopic;
 
     @KafkaListener(
-            topics = "${app.kafka.topics.inventory-init-request:inventory-init-request}",
+            topics = "${app.kafka.topics.inventory-init-request:inventory-init.v1}",
             groupId = "${spring.application.name}"
     )
     public void initializeInventory(String payload) {
-        try (MDC.MDCCloseable ignored = MDC.putCloseable("logGroup", "inventory-init-request")) {
+        try (MDC.MDCCloseable ignored = MDC.putCloseable("logGroup", "inventory-init.v1")) {
             long startTimeNanos = System.nanoTime();
             InventoryInitRequestedEvent event = readEvent(payload);
             log.info("Inventory init event received for requestId={} eventId={} venueId={} inventoryType={} seatMapVersion={}",
@@ -56,7 +56,7 @@ public class InternalEventInventoryController {
         try {
             return objectMapper.readValue(payload, InventoryInitRequestedEvent.class);
         } catch (Exception e) {
-            throw new IllegalArgumentException("Failed to parse inventory-init-request payload", e);
+            throw new IllegalArgumentException("Failed to parse inventory-init.v1 payload", e);
         }
     }
 

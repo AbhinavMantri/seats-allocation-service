@@ -44,6 +44,9 @@ class InternalSeatsServiceTest {
     private EventSeatRepository eventSeatRepository;
 
     @Mock
+    private EventSeatService eventSeatService;
+
+    @Mock
     private EventInventoryContextRepository eventInventoryContextRepository;
 
     @Mock
@@ -62,6 +65,7 @@ class InternalSeatsServiceTest {
     void setUp() {
         objectMapper = new ObjectMapper();
         internalSeatsService = new InternalSeatsService(
+                eventSeatService,
                 eventSeatRepository,
                 eventInventoryContextRepository,
                 allocationIdempotencyRepository,

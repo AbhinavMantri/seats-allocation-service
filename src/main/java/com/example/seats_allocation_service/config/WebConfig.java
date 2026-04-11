@@ -32,8 +32,6 @@ public class WebConfig implements WebMvcConfigurer {
         registration.addUrlPatterns("/events/*");
         registration.addUrlPatterns("/events/*/seats");
         registration.addUrlPatterns("/events/*/availability");
-        registration.addUrlPatterns("/events/*/locks");
-        registration.addUrlPatterns("/events/*/locks/release");
         registration.setOrder(1);
         return registration;
     }

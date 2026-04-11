@@ -6,6 +6,7 @@ import com.example.seats_allocation_service.dtos.ReleaseSeatsResult;
 import com.example.seats_allocation_service.dtos.SeatsConfirmation;
 import com.example.seats_allocation_service.exceptions.IdempotencyConflictException;
 import com.example.seats_allocation_service.exceptions.SeatLockConflictException;
+import com.example.seats_allocation_service.exceptions.SeatsNotFoundException;
 import com.example.seats_allocation_service.service.InternalSeatsService;
 import com.example.seats_allocation_service.service.JWTService;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,6 +29,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -102,6 +105,32 @@ class InternalSeatsControllerApiTest {
     }
 
     @Test
+    void lockSeatsApi_whenAuthorizedAndSuccessful_returnsSuccessPayload() throws Exception {
+        UUID eventId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        UUID seatId = UUID.randomUUID();
+        doNothing().when(internalSeatsService).lockSeats(eq(eventId), eq("idem-123"), eq(userId), eq(List.of(seatId)));
+
+        String requestJson = """
+                {
+                  "userId": "%s",
+                  "idempotencyKey": "idem-123",
+                  "seatIds": ["%s"]
+                }
+                """.formatted(userId, seatId);
+
+        mockMvc.perform(post("/internal/seats/{eventId}/locks", eventId)
+                        .header(InternalApiAccessInterceptor.HEADER_SERVICE_NAME, "inventory-service")
+                        .header(InternalApiAccessInterceptor.HEADER_SERVICE_TOKEN, "svc-token")
+                        .header(InternalApiAccessInterceptor.HEADER_AUTHORIZATION, "Bearer " + jwtWithRole("ADMIN"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestJson))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SUCCESS"))
+                .andExpect(jsonPath("$.message").value("Seats locked successfully"));
+    }
+
+    @Test
     void releaseSeatsApi_whenAuthorizedAndSuccessful_returnsPayload() throws Exception {
         String idempotencyKey = "idem-release";
         UUID eventId = UUID.randomUUID();
@@ -142,6 +171,31 @@ class InternalSeatsControllerApiTest {
                 .andExpect(jsonPath("$.result.eventId").value(eventId.toString()))
                 .andExpect(jsonPath("$.result.bookingId").value(bookingId.toString()))
                 .andExpect(jsonPath("$.result.releasedCount").value(1));
+    }
+
+    @Test
+    void releaseLocksApi_whenAuthorizedAndSuccessful_returnsReleasedCountPayload() throws Exception {
+        UUID eventId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        UUID seatId = UUID.randomUUID();
+        when(internalSeatsService.releaseLocks(eventId, userId, List.of(seatId))).thenReturn(1);
+
+        String requestJson = """
+                {
+                  "userId": "%s",
+                  "seatIds": ["%s"]
+                }
+                """.formatted(userId, seatId);
+
+        mockMvc.perform(post("/internal/seats/{eventId}/locks/release", eventId)
+                        .header(InternalApiAccessInterceptor.HEADER_SERVICE_NAME, "inventory-service")
+                        .header(InternalApiAccessInterceptor.HEADER_SERVICE_TOKEN, "svc-token")
+                        .header(InternalApiAccessInterceptor.HEADER_AUTHORIZATION, "Bearer " + jwtWithRole("ADMIN"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestJson))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SUCCESS"))
+                .andExpect(jsonPath("$.message").value("Released 1 seat lock(s)"));
     }
 
     @Test
@@ -210,6 +264,32 @@ class InternalSeatsControllerApiTest {
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.status").value("FAILURE"))
                 .andExpect(jsonPath("$.message").value("idempotency key conflict"));
+    }
+
+    @Test
+    void releaseLocksApi_whenServiceRejectsRequest_returnsNotFound() throws Exception {
+        UUID eventId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        UUID seatId = UUID.randomUUID();
+        when(internalSeatsService.releaseLocks(eventId, userId, List.of(seatId)))
+                .thenThrow(new SeatsNotFoundException("missing seats"));
+
+        String requestJson = """
+                {
+                  "userId": "%s",
+                  "seatIds": ["%s"]
+                }
+                """.formatted(userId, seatId);
+
+        mockMvc.perform(post("/internal/seats/{eventId}/locks/release", eventId)
+                        .header(InternalApiAccessInterceptor.HEADER_SERVICE_NAME, "inventory-service")
+                        .header(InternalApiAccessInterceptor.HEADER_SERVICE_TOKEN, "svc-token")
+                        .header(InternalApiAccessInterceptor.HEADER_AUTHORIZATION, "Bearer " + jwtWithRole("ADMIN"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestJson))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.status").value("FAILURE"))
+                .andExpect(jsonPath("$.message").value("missing seats"));
     }
 
     @Test

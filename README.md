@@ -145,7 +145,7 @@ Triggered by **Event Service** after event creation.
 
 Topic:
 
-    inventory-init-request
+    inventory-init.v1
 
 Example payload:
 
@@ -166,7 +166,7 @@ Published after inventory creation.
 
 Topic:
 
-    inventory-init-result
+    inventory-published.v1
 
 ------------------------------------------------------------------------
 
@@ -218,7 +218,7 @@ Example `application.yml`
 
     spring:
       datasource:
-        url: jdbc:postgresql://localhost:5432/seatdb
+        url: jdbc:postgresql://localhost:5432/allocation_db
         username: postgres
         password: postgres
 

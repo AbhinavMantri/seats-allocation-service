@@ -50,7 +50,7 @@ class InternalEventInventoryControllerTest {
                 kafkaTemplate,
                 objectMapper
         );
-        ReflectionTestUtils.setField(internalEventInventoryController, "inventoryInitResultTopic", "inventory-init.v1");
+        ReflectionTestUtils.setField(internalEventInventoryController, "inventoryInitResultTopic", "inventory-published.v1");
     }
 
     @Test
@@ -65,7 +65,7 @@ class InternalEventInventoryControllerTest {
         verify(eventSeatService).getSeatCount(event.getEventId());
         ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
         verify(kafkaTemplate).send(
-                org.mockito.ArgumentMatchers.eq("inventory-init.v1"),
+                org.mockito.ArgumentMatchers.eq("inventory-published.v1"),
                 org.mockito.ArgumentMatchers.eq(event.getEventId().toString()),
                 payloadCaptor.capture()
         );
