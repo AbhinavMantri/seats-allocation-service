@@ -22,8 +22,11 @@ import tools.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 @Slf4j
@@ -59,8 +62,8 @@ public class EventInventoryService {
         String payloadHash = hashPayload(
                 event.getEventId(),
                 event.getVenueId(),
-                event.getInventoryType(),
-                event.getSeatMapVersion()
+                event.getPublishedAt(),
+                canonicalSeatInventory(event.getSeats())
         );
         String cacheKey = cacheKey(event.getEventId(), event.getRequestId());
         EventInventoryContext redisReplay = readCachedResponse(cacheKey, payloadHash, EventInventoryContext.class);
@@ -81,8 +84,8 @@ public class EventInventoryService {
 
         InventoryInitRequest request = new InventoryInitRequest();
         request.setVenueId(event.getVenueId());
-        request.setCurrency(defaultCurrency);
-        request.setPricing(Set.<InventoryPricing>of());
+        request.setCurrency(resolveCurrency(event));
+        request.setPricing(mapPricing(event.getSeats()));
         EventInventoryContext savedContext = initializeInventory(event.getEventId(), request);
         cacheIdempotentResponse(OPERATION_INVENTORY_INIT, event.getEventId(), event.getRequestId(), payloadHash, cacheKey, savedContext);
         return savedContext;
@@ -192,6 +195,61 @@ public class EventInventoryService {
 
     private String cacheKey(UUID eventId, String requestId) {
         return INVENTORY_RESPONSE_CACHE_KEY_PREFIX + eventId + ":" + requestId;
+    }
+
+    private Set<InventoryPricing> mapPricing(List<InventoryInitRequestedEvent.SeatInventory> seats) {
+        if (seats == null || seats.isEmpty()) {
+            return Set.of();
+        }
+
+        return seats.stream()
+                .map(seat -> {
+                    InventoryPricing pricing = new InventoryPricing();
+                    pricing.setVenueSeatId(seat.getVenueSeatId());
+                    pricing.setSectionId(seat.getSectionId());
+                    pricing.setPriceCents(seat.getPriceCents() == null ? null : seat.getPriceCents().longValue());
+                    return pricing;
+                })
+                .collect(Collectors.toSet());
+    }
+
+    private String resolveCurrency(InventoryInitRequestedEvent event) {
+        if (event.getSeats() != null && !event.getSeats().isEmpty()) {
+            return event.getSeats().stream()
+                .map(InventoryInitRequestedEvent.SeatInventory::getCurrency)
+                .filter(currency -> currency != null && !currency.isBlank())
+                .map(String::trim)
+                .map(String::toUpperCase)
+                .findFirst()
+                .orElse(defaultCurrency);
+        }
+
+        if (event.getSectionPrices() == null || event.getSectionPrices().isEmpty()) {
+            return defaultCurrency;
+        }
+
+        return event.getSectionPrices().stream()
+                .map(InventoryInitRequestedEvent.SectionPrice::getCurrency)
+                .filter(currency -> currency != null && !currency.isBlank())
+                .map(String::trim)
+                .map(String::toUpperCase)
+                .findFirst()
+                .orElse(defaultCurrency);
+    }
+
+    private String canonicalSeatInventory(List<InventoryInitRequestedEvent.SeatInventory> seats) {
+        if (seats == null || seats.isEmpty()) {
+            return "";
+        }
+
+        return seats.stream()
+                .sorted(Comparator.comparing(InventoryInitRequestedEvent.SeatInventory::getVenueSeatId, Comparator.nullsLast(UUID::compareTo)))
+                .map(seat -> String.join(":",
+                        String.valueOf(seat.getVenueSeatId()),
+                        String.valueOf(seat.getSectionId()),
+                        String.valueOf(seat.getPriceCents()),
+                        String.valueOf(seat.getCurrency())))
+                .collect(Collectors.joining(","));
     }
 
     private record CachedIdempotentResponse(String payloadHash, String responsePayload) {

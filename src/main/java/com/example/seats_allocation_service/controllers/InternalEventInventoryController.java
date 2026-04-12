@@ -36,8 +36,10 @@ public class InternalEventInventoryController {
         try (MDC.MDCCloseable ignored = MDC.putCloseable("logGroup", "inventory-init.v1")) {
             long startTimeNanos = System.nanoTime();
             InventoryInitRequestedEvent event = readEvent(payload);
-            log.info("Inventory init event received for requestId={} eventId={} venueId={} inventoryType={} seatMapVersion={}",
-                    event.getRequestId(), event.getEventId(), event.getVenueId(), event.getInventoryType(), event.getSeatMapVersion());
+            int sectionPricesCount = event.getSectionPrices() == null ? 0 : event.getSectionPrices().size();
+            int seatsCount = event.getSeats() == null ? 0 : event.getSeats().size();
+            log.info("Inventory init event received for requestId={} eventId={} venueId={} eventType={} sectionPricesCount={} seatsCount={}",
+                    event.getRequestId(), event.getEventId(), event.getVenueId(), event.getEventType(), sectionPricesCount, seatsCount);
             try {
                 eventInventoryService.initializeInventory(event);
                 publishInventoryInitialized(event);

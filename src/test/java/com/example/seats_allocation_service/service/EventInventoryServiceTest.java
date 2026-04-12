@@ -151,7 +151,20 @@ class EventInventoryServiceTest {
         InventoryInitRequestedEvent event = new InventoryInitRequestedEvent();
         event.setEventId(eventId);
         event.setVenueId(venueId);
-        event.setRequestId("req-init-001");
+        event.setPublishedAt(java.time.Instant.parse("2026-04-12T10:15:30Z"));
+        UUID sectionId = UUID.randomUUID();
+        UUID venueSeatId = UUID.randomUUID();
+        InventoryInitRequestedEvent.SectionPrice sectionPrice = new InventoryInitRequestedEvent.SectionPrice();
+        sectionPrice.setSectionId(sectionId);
+        sectionPrice.setPriceCents(1200);
+        sectionPrice.setCurrency("INR");
+        event.setSectionPrices(java.util.List.of(sectionPrice));
+        InventoryInitRequestedEvent.SeatInventory seat = new InventoryInitRequestedEvent.SeatInventory();
+        seat.setVenueSeatId(venueSeatId);
+        seat.setSectionId(sectionId);
+        seat.setPriceCents(1200);
+        seat.setCurrency("INR");
+        event.setSeats(java.util.List.of(seat));
 
         when(eventInventoryContextRepository.existsById(eventId)).thenReturn(false);
         when(eventInventoryContextRepository.save(any(EventInventoryContext.class)))
@@ -162,8 +175,8 @@ class EventInventoryServiceTest {
         assertNotNull(result);
         assertEquals(eventId, result.getId());
         assertEquals(venueId, result.getVenueId());
-        assertEquals("USD", result.getCurrency());
-        verify(eventSeatService, never()).initializeInventory(any(UUID.class), any());
+        assertEquals("INR", result.getCurrency());
+        verify(eventSeatService).initializeInventory(any(UUID.class), any());
     }
 
     @Test
@@ -173,9 +186,20 @@ class EventInventoryServiceTest {
         InventoryInitRequestedEvent event = new InventoryInitRequestedEvent();
         event.setEventId(eventId);
         event.setVenueId(venueId);
-        event.setInventoryType("RESERVED");
-        event.setSeatMapVersion(2);
-        event.setRequestId("req-init-replay");
+        event.setPublishedAt(java.time.Instant.parse("2026-04-12T10:15:30Z"));
+        UUID sectionId = UUID.randomUUID();
+        UUID venueSeatId = UUID.randomUUID();
+        InventoryInitRequestedEvent.SectionPrice sectionPrice = new InventoryInitRequestedEvent.SectionPrice();
+        sectionPrice.setSectionId(sectionId);
+        sectionPrice.setPriceCents(1500);
+        sectionPrice.setCurrency("USD");
+        event.setSectionPrices(java.util.List.of(sectionPrice));
+        InventoryInitRequestedEvent.SeatInventory seat = new InventoryInitRequestedEvent.SeatInventory();
+        seat.setVenueSeatId(venueSeatId);
+        seat.setSectionId(sectionId);
+        seat.setPriceCents(1500);
+        seat.setCurrency("USD");
+        event.setSeats(java.util.List.of(seat));
 
         EventInventoryContext stored = new EventInventoryContext();
         stored.setId(eventId);
@@ -207,9 +231,20 @@ class EventInventoryServiceTest {
         InventoryInitRequestedEvent event = new InventoryInitRequestedEvent();
         event.setEventId(eventId);
         event.setVenueId(venueId);
-        event.setInventoryType("RESERVED");
-        event.setSeatMapVersion(2);
-        event.setRequestId("req-init-redis");
+        event.setPublishedAt(java.time.Instant.parse("2026-04-12T10:15:30Z"));
+        UUID sectionId = UUID.randomUUID();
+        UUID venueSeatId = UUID.randomUUID();
+        InventoryInitRequestedEvent.SectionPrice sectionPrice = new InventoryInitRequestedEvent.SectionPrice();
+        sectionPrice.setSectionId(sectionId);
+        sectionPrice.setPriceCents(1500);
+        sectionPrice.setCurrency("USD");
+        event.setSectionPrices(java.util.List.of(sectionPrice));
+        InventoryInitRequestedEvent.SeatInventory seat = new InventoryInitRequestedEvent.SeatInventory();
+        seat.setVenueSeatId(venueSeatId);
+        seat.setSectionId(sectionId);
+        seat.setPriceCents(1500);
+        seat.setCurrency("USD");
+        event.setSeats(java.util.List.of(seat));
 
         EventInventoryContext stored = new EventInventoryContext();
         stored.setId(eventId);
@@ -237,9 +272,20 @@ class EventInventoryServiceTest {
         InventoryInitRequestedEvent event = new InventoryInitRequestedEvent();
         event.setEventId(eventId);
         event.setVenueId(UUID.randomUUID());
-        event.setInventoryType("RESERVED");
-        event.setSeatMapVersion(2);
-        event.setRequestId("req-init-replay");
+        event.setPublishedAt(java.time.Instant.parse("2026-04-12T10:15:30Z"));
+        UUID sectionId = UUID.randomUUID();
+        UUID venueSeatId = UUID.randomUUID();
+        InventoryInitRequestedEvent.SectionPrice sectionPrice = new InventoryInitRequestedEvent.SectionPrice();
+        sectionPrice.setSectionId(sectionId);
+        sectionPrice.setPriceCents(1500);
+        sectionPrice.setCurrency("USD");
+        event.setSectionPrices(java.util.List.of(sectionPrice));
+        InventoryInitRequestedEvent.SeatInventory seat = new InventoryInitRequestedEvent.SeatInventory();
+        seat.setVenueSeatId(venueSeatId);
+        seat.setSectionId(sectionId);
+        seat.setPriceCents(1500);
+        seat.setCurrency("USD");
+        event.setSeats(java.util.List.of(seat));
 
         AllocationIdempotency idempotency = new AllocationIdempotency();
         idempotency.setOperationType("INVENTORY_INIT");
@@ -256,7 +302,11 @@ class EventInventoryServiceTest {
     }
 
     private String hashInventoryPayload(InventoryInitRequestedEvent event) {
-        return hash(event.getEventId(), event.getVenueId(), event.getInventoryType(), event.getSeatMapVersion());
+        String seats = event.getSeats() == null ? "" : event.getSeats().stream()
+                .map(seat -> seat.getVenueSeatId() + ":" + seat.getSectionId() + ":" + seat.getPriceCents() + ":" + seat.getCurrency())
+                .reduce((left, right) -> left + "," + right)
+                .orElse("");
+        return hash(event.getEventId(), event.getVenueId(), event.getPublishedAt(), seats);
     }
 
     private String hash(Object... values) {

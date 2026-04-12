@@ -74,7 +74,7 @@ public class EventSeatService {
                 EventSeat seat = new EventSeat();
                 seat.setEventId(eventId);
                 seat.setSectionId(item.getSectionId());
-                seat.setVenueSeatId(item.getSectionId());
+                seat.setVenueSeatId(item.getVenueSeatId());
                 seat.setPriceCents(Math.toIntExact(item.getPriceCents()));
                 seats.add(seat);
             }

@@ -6,6 +6,7 @@ import java.util.UUID;
 
 @Data
 public class InventoryPricing {
+    private UUID venueSeatId;
     private UUID sectionId;
     private Long priceCents;
 }

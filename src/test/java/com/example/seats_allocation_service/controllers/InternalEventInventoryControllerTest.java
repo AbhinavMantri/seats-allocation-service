@@ -20,6 +20,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
@@ -74,7 +75,7 @@ class InternalEventInventoryControllerTest {
         assertEquals(event.getEventId(), published.getEventId());
         assertEquals("SUCCESS", published.getStatus());
         assertEquals(12, published.getTotalSeats());
-        assertEquals(3, published.getSeatMapVersion());
+        assertNull(published.getSeatMapVersion());
         assertNotNull(published.getProcessedAt());
     }
 
@@ -101,11 +102,26 @@ class InternalEventInventoryControllerTest {
 
     private InventoryInitRequestedEvent event() {
         InventoryInitRequestedEvent event = new InventoryInitRequestedEvent();
-        event.setRequestId("req-init-001");
         event.setEventId(UUID.randomUUID());
         event.setVenueId(UUID.randomUUID());
-        event.setInventoryType("RESERVED");
-        event.setSeatMapVersion(3);
+        event.setEventType("EVENT_PUBLISHED");
+        InventoryInitRequestedEvent.SectionPrice sectionPrice = new InventoryInitRequestedEvent.SectionPrice();
+        sectionPrice.setSectionId(UUID.randomUUID());
+        sectionPrice.setSectionName("VIP");
+        sectionPrice.setSortOrder(1);
+        sectionPrice.setPriceCents(2500);
+        sectionPrice.setCurrency("INR");
+        event.setSectionPrices(java.util.List.of(sectionPrice));
+        InventoryInitRequestedEvent.SeatInventory seat = new InventoryInitRequestedEvent.SeatInventory();
+        seat.setEventSeatId(UUID.randomUUID());
+        seat.setVenueSeatId(UUID.randomUUID());
+        seat.setSectionId(sectionPrice.getSectionId());
+        seat.setSeatCode("VIP-R01-S01");
+        seat.setRowLabel("R01");
+        seat.setSeatNumber(1);
+        seat.setPriceCents(2500);
+        seat.setCurrency("INR");
+        event.setSeats(java.util.List.of(seat));
         return event;
     }
 }
