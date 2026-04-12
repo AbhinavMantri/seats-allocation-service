@@ -428,8 +428,10 @@ GET /actuator/health
 ## Inventory Initialization
 - `eventId` must be non-empty
 - `venueId` must be non-empty
-- `inventoryType` must be valid enum
-- duplicate seat ids within same event are not allowed
+- `eventType` is used as the effective inventory type in the current DTO
+- `publishedAt` participates in idempotency hashing
+- duplicate `venueSeatId` values within the same event are not allowed
+- seat pricing is derived from `seats[]`
 - initialization is allowed only once unless explicit re-init endpoint is introduced
 - inbound inventory initialization is handled via Kafka, not REST
 
@@ -482,19 +484,47 @@ inventory-init.v1
 ### Payload
 ```json
 {
-  "requestId": "req_init_001",
+  "eventType": "EVENT_PUBLISHED",
   "eventId": "9c9a7b0f-bf09-4f91-9235-4a4bbf34f97b",
   "venueId": "6f63c2bb-6995-4be3-a472-9cf2343a70ef",
-  "inventoryType": "RESERVED",
-  "seatMapVersion": 3,
-  "triggeredAt": "2026-03-16T15:25:00Z"
+  "organiserId": "e8f9d5f4-4b52-4d4f-8b9c-c58aaf2e3b58",
+  "organiserEmail": "ops@example.com",
+  "title": "Spring Music Fest",
+  "category": "MUSIC",
+  "startsAt": "2026-04-20T18:30:00Z",
+  "endsAt": "2026-04-20T22:00:00Z",
+  "publishedAt": "2026-04-12T12:40:00Z",
+  "sectionPrices": [
+    {
+      "sectionId": "a9d9ad1a-d9ef-4f19-b79e-dbd0fcaef652",
+      "sectionName": "VIP",
+      "sortOrder": 1,
+      "priceCents": 2500,
+      "currency": "INR"
+    }
+  ],
+  "seats": [
+    {
+      "eventSeatId": "88a6a952-17e9-4748-a56a-47f231e82e55",
+      "venueSeatId": "a2b35f4d-a31a-41db-ae0b-d0b0217bfe9d",
+      "sectionId": "a9d9ad1a-d9ef-4f19-b79e-dbd0fcaef652",
+      "seatCode": "VIP-R01-S01",
+      "rowLabel": "R01",
+      "seatNumber": 1,
+      "priceCents": 2500,
+      "currency": "INR"
+    }
+  ]
 }
 ```
 
 ### Processing Notes
 - this is the live inventory initialization entry point
 - no REST inventory-init endpoint is currently exposed by this service
-- idempotency is enforced using `requestId` together with the inventory payload
+- `requestId` is derived from `eventId`
+- idempotency hashing currently uses `eventId`, `venueId`, `publishedAt`, and canonicalized seat inventory
+- seat pricing is built from `seats[]` using `venueSeatId`, `sectionId`, and `priceCents`
+- event currency is resolved from the first non-blank `seats[].currency`, then `sectionPrices[].currency`, else default config
 
 ---
 
@@ -509,11 +539,11 @@ inventory-published.v1
 ### Payload
 ```json
 {
-  "requestId": "req_init_001",
+  "requestId": "9c9a7b0f-bf09-4f91-9235-4a4bbf34f97b",
   "eventId": "9c9a7b0f-bf09-4f91-9235-4a4bbf34f97b",
   "status": "SUCCESS",
-  "totalSeats": 500,
-  "seatMapVersion": 3,
+  "totalSeats": 1,
+  "seatMapVersion": null,
   "processedAt": "2026-03-16T15:30:00Z"
 }
 ```
@@ -521,7 +551,7 @@ inventory-published.v1
 ### Failure Payload Example
 ```json
 {
-  "requestId": "req_init_001",
+  "requestId": "9c9a7b0f-bf09-4f91-9235-4a4bbf34f97b",
   "eventId": "9c9a7b0f-bf09-4f91-9235-4a4bbf34f97b",
   "status": "FAILED",
   "errorCode": "SEAT_MAP_NOT_FOUND",

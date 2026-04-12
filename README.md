@@ -72,19 +72,9 @@ operations** and **asynchronous via Kafka for background workflows**.
 
 ### 1. Initialize Inventory
 
-Creates seat inventory for an event.
-
-    POST /internal/inventory/init
-
-Example request:
-
-``` json
-{
-  "eventId": "evt_123",
-  "venueId": "ven_456",
-  "totalSeats": 500
-}
-```
+Inventory initialization is currently triggered asynchronously by Kafka.
+There is no REST `POST /internal/inventory/init` endpoint in the current
+implementation.
 
 ------------------------------------------------------------------------
 
@@ -151,12 +141,47 @@ Example payload:
 
 ``` json
 {
-  "eventId": "evt_123",
-  "venueId": "ven_456",
-  "totalSeats": 500,
-  "requestId": "req_001"
+  "eventType": "EVENT_PUBLISHED",
+  "eventId": "9c9a7b0f-bf09-4f91-9235-4a4bbf34f97b",
+  "venueId": "6f63c2bb-6995-4be3-a472-9cf2343a70ef",
+  "organiserId": "e8f9d5f4-4b52-4d4f-8b9c-c58aaf2e3b58",
+  "organiserEmail": "ops@example.com",
+  "title": "Spring Music Fest",
+  "category": "MUSIC",
+  "startsAt": "2026-04-20T18:30:00Z",
+  "endsAt": "2026-04-20T22:00:00Z",
+  "publishedAt": "2026-04-12T12:40:00Z",
+  "sectionPrices": [
+    {
+      "sectionId": "a9d9ad1a-d9ef-4f19-b79e-dbd0fcaef652",
+      "sectionName": "VIP",
+      "sortOrder": 1,
+      "priceCents": 2500,
+      "currency": "INR"
+    }
+  ],
+  "seats": [
+    {
+      "eventSeatId": "88a6a952-17e9-4748-a56a-47f231e82e55",
+      "venueSeatId": "a2b35f4d-a31a-41db-ae0b-d0b0217bfe9d",
+      "sectionId": "a9d9ad1a-d9ef-4f19-b79e-dbd0fcaef652",
+      "seatCode": "VIP-R01-S01",
+      "rowLabel": "R01",
+      "seatNumber": 1,
+      "priceCents": 2500,
+      "currency": "INR"
+    }
+  ]
 }
 ```
+
+Notes:
+- `requestId` is derived from `eventId` in the current consumer.
+- Currency is resolved from `seats[].currency`, then `sectionPrices[].currency`,
+  and falls back to the configured default if missing.
+- Seat inventory creation uses the `seats` array and maps
+  `venueSeatId`, `sectionId`, and `priceCents` into the service's
+  pricing model.
 
 ------------------------------------------------------------------------
 
@@ -167,6 +192,19 @@ Published after inventory creation.
 Topic:
 
     inventory-published.v1
+
+Example payload:
+
+``` json
+{
+  "requestId": "9c9a7b0f-bf09-4f91-9235-4a4bbf34f97b",
+  "eventId": "9c9a7b0f-bf09-4f91-9235-4a4bbf34f97b",
+  "status": "SUCCESS",
+  "totalSeats": 1,
+  "seatMapVersion": null,
+  "processedAt": "2026-04-12T12:40:05Z"
+}
+```
 
 ------------------------------------------------------------------------
 
