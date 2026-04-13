@@ -99,30 +99,31 @@ public class EventSeatsController {
     public ResponseEntity<ApiResponse> lockSeats(@PathVariable UUID eventId, @RequestBody @Valid LockSeatsRequest request) {
         return withLogGroup("event-seats-lock", () -> {
             long startTimeNanos = System.nanoTime();
-            log.info("lockSeats request received for eventId={} userId={} requestedSeatCount={} idempotencyKey={}",
-                    eventId, request.getUserId(), request.getSeatIds() == null ? 0 : request.getSeatIds().size(), request.getIdempotencyKey());
+            UUID lockOwnerId = request.getBookingId() == null ? request.getUserId() : request.getBookingId();
+            log.info("lockSeats request received for eventId={} lockOwnerId={} requestedSeatCount={} idempotencyKey={}",
+                    eventId, lockOwnerId, request.getSeatIds() == null ? 0 : request.getSeatIds().size(), request.getIdempotencyKey());
             ApiResponse response = new ApiResponse();
             try {
-                eventSeatService.lockSeats(eventId, request.getIdempotencyKey(), request.getUserId(), request.getSeatIds());
+                eventSeatService.lockSeats(eventId, request.getIdempotencyKey(), lockOwnerId, request.getSeatIds());
                 response.setStatus(ResponseStatus.SUCCESS);
                 response.setMessage("Seats locked successfully");
                 long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
-                log.info("lockSeats succeeded for eventId={} userId={} idempotencyKey={} latencyMs={}",
-                        eventId, request.getUserId(), request.getIdempotencyKey(), latencyMs);
+                log.info("lockSeats succeeded for eventId={} lockOwnerId={} idempotencyKey={} latencyMs={}",
+                        eventId, lockOwnerId, request.getIdempotencyKey(), latencyMs);
                 return ResponseEntity.ok(response);
             } catch (EventNotFoundException e) {
                 response.setStatus(ResponseStatus.FAILURE);
                 response.setMessage(e.getMessage());
                 long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
-                log.warn("lockSeats failed: event not found for eventId={} userId={} idempotencyKey={} reason={} latencyMs={}",
-                        eventId, request.getUserId(), request.getIdempotencyKey(), e.getMessage(), latencyMs);
+                log.warn("lockSeats failed: event not found for eventId={} lockOwnerId={} idempotencyKey={} reason={} latencyMs={}",
+                        eventId, lockOwnerId, request.getIdempotencyKey(), e.getMessage(), latencyMs);
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
             } catch (SeatsNotFoundException | SeatLockConflictException e) {
                 response.setStatus(ResponseStatus.FAILURE);
                 response.setMessage(e.getMessage());
                 long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
-                log.warn("lockSeats failed: conflict for eventId={} userId={} idempotencyKey={} reason={} latencyMs={}",
-                        eventId, request.getUserId(), request.getIdempotencyKey(), e.getMessage(), latencyMs);
+                log.warn("lockSeats failed: conflict for eventId={} lockOwnerId={} idempotencyKey={} reason={} latencyMs={}",
+                        eventId, lockOwnerId, request.getIdempotencyKey(), e.getMessage(), latencyMs);
                 return ResponseEntity.status(HttpStatus.CONFLICT).body(response);
             }
         });

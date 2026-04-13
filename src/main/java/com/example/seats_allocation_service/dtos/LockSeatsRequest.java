@@ -10,7 +10,9 @@ import lombok.Data;
 
 @Data
 public class LockSeatsRequest {
-    @NotNull(message = "userId is required") 
+    private UUID bookingId;
+
+    @NotNull(message = "userId is required")
     private UUID userId;
 
     @NotBlank(message = "idempotencyKey is required")

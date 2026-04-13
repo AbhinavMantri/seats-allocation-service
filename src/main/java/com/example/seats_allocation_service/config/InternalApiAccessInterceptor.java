@@ -41,10 +41,15 @@ public class InternalApiAccessInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
-        if (isServiceWhitelisted(
+        boolean trustedService = isServiceWhitelisted(
                 request.getHeader(HEADER_SERVICE_NAME),
                 request.getHeader(HEADER_SERVICE_TOKEN)
-        ) && isRoleAllowedFromJwt(request.getHeader(HEADER_AUTHORIZATION))) {
+        );
+        if (request.getRequestURI().startsWith("/internal/seats/") && trustedService) {
+            return true;
+        }
+
+        if (trustedService && isRoleAllowedFromJwt(request.getHeader(HEADER_AUTHORIZATION))) {
             return true;
         }
 

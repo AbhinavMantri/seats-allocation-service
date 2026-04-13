@@ -163,41 +163,41 @@ public class EventSeatService {
     }
 
     @Transactional
-    public void lockSeats(UUID eventId, String idempotencyKey, UUID userId, List<UUID> seatIds) throws EventNotFoundException, SeatsNotFoundException, SeatLockConflictException {
+    public void lockSeats(UUID eventId, String idempotencyKey, UUID lockOwnerId, List<UUID> seatIds) throws EventNotFoundException, SeatsNotFoundException, SeatLockConflictException {
         long startTimeNanos = System.nanoTime();
-        log.info("lockSeats service started for eventId={} userId={} idempotencyKey={} inputSeatCount={}",
-                eventId, userId, idempotencyKey, seatIds == null ? 0 : seatIds.size());
+        log.info("lockSeats service started for eventId={} lockOwnerId={} idempotencyKey={} inputSeatCount={}",
+                eventId, lockOwnerId, idempotencyKey, seatIds == null ? 0 : seatIds.size());
         // De-duplicate incoming seat ids while preserving client order.
         List<UUID> normalizedSeatIds = new ArrayList<>(new LinkedHashSet<>(seatIds));
         String seatIdsHash = hashSeatIds(normalizedSeatIds);
-        String cacheKey = cacheKey(eventId, userId, idempotencyKey);
-        String internalIdempotencyKey = internalLockIdempotencyKey(userId, idempotencyKey);
+        String cacheKey = cacheKey(eventId, lockOwnerId, idempotencyKey);
+        String internalIdempotencyKey = internalLockIdempotencyKey(lockOwnerId, idempotencyKey);
 
         // Fast idempotency replay path via Redis cache.
         Optional<String> cachedRedisResponseMessage = readCachedResponseMessage(cacheKey);
         if (cachedRedisResponseMessage.isPresent()) {
             long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
-            log.info("lockSeats service idempotent replay from cache for eventId={} userId={} idempotencyKey={} latencyMs={}",
-                    eventId, userId, idempotencyKey, latencyMs);
+            log.info("lockSeats service idempotent replay from cache for eventId={} lockOwnerId={} idempotencyKey={} latencyMs={}",
+                    eventId, lockOwnerId, idempotencyKey, latencyMs);
             return;
         }
 
-        // Durable idempotency check in DB for (eventId, userId, idempotencyKey).
+        // Durable idempotency check in DB for (eventId, lockOwnerId, idempotencyKey).
         Optional<AllocationIdempotency> existingIdempotency =
                 allocationIdempotencyRepository.findByOperationTypeAndResourceIdAndIdempotencyKey(OPERATION_SEAT_LOCK, eventId, internalIdempotencyKey);
         if (existingIdempotency.isPresent()) {
             AllocationIdempotency idempotency = existingIdempotency.get();
             // Same key with different seat list is a request conflict.
             if (!idempotency.getPayloadHash().equals(seatIdsHash)) {
-                log.warn("lockSeats service idempotency key conflict for eventId={} userId={} idempotencyKey={}",
-                        eventId, userId, idempotencyKey);
+                log.warn("lockSeats service idempotency key conflict for eventId={} lockOwnerId={} idempotencyKey={}",
+                        eventId, lockOwnerId, idempotencyKey);
                 throw new SeatLockConflictException("idempotencyKey was already used with a different seat list");
             }
             // Same key with same payload: replay accepted.
             cacheResponsePayload(cacheKey, idempotency.getResponsePayload());
             long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
-            log.info("lockSeats service idempotent replay from db for eventId={} userId={} idempotencyKey={} latencyMs={}",
-                    eventId, userId, idempotencyKey, latencyMs);
+            log.info("lockSeats service idempotent replay from db for eventId={} lockOwnerId={} idempotencyKey={} latencyMs={}",
+                    eventId, lockOwnerId, idempotencyKey, latencyMs);
             return;
         }
 
@@ -205,8 +205,8 @@ public class EventSeatService {
         List<EventSeat> seats = eventSeatRepository.findForUpdateByEventIdAndIds(eventId, normalizedSeatIds);
         // Missing any requested seat means client asked for invalid inventory.
         if (seats.size() != normalizedSeatIds.size()) {
-            log.warn("lockSeats service seats not found for eventId={} userId={} idempotencyKey={} requestedSeatCount={} foundSeatCount={}",
-                    eventId, userId, idempotencyKey, normalizedSeatIds.size(), seats.size());
+            log.warn("lockSeats service seats not found for eventId={} lockOwnerId={} idempotencyKey={} requestedSeatCount={} foundSeatCount={}",
+                    eventId, lockOwnerId, idempotencyKey, normalizedSeatIds.size(), seats.size());
             throw new SeatsNotFoundException("One or more requested seats do not exist for this event");
         }
 
@@ -216,25 +216,25 @@ public class EventSeatService {
             EventSeat seat = seatById.get(seatId);
             // Booked seats cannot be locked again.
             if (seat.getStatus() == EventSeat.SeatStatus.BOOKED) {
-                log.warn("lockSeats service seat already booked for eventId={} userId={} idempotencyKey={} seatId={}",
-                        eventId, userId, idempotencyKey, seatId);
+                log.warn("lockSeats service seat already booked for eventId={} lockOwnerId={} idempotencyKey={} seatId={}",
+                        eventId, lockOwnerId, idempotencyKey, seatId);
                 throw new SeatLockConflictException("Seat " + seatId + " is already booked");
             }
-            // Active lock by another user is a conflict.
+            // Active lock by another checkout owner is a conflict.
             if (seat.getStatus() == EventSeat.SeatStatus.LOCKED
                     && seat.getLockExpiresAt() != null
                     && seat.getLockExpiresAt().isAfter(now)
-                    && !userId.equals(seat.getLockedBy())) {
-                log.warn("lockSeats service seat already locked by another user for eventId={} userId={} idempotencyKey={} seatId={} lockedBy={}",
-                        eventId, userId, idempotencyKey, seatId, seat.getLockedBy());
-                throw new SeatLockConflictException("Seat " + seatId + " is locked by another user");
+                    && !lockOwnerId.equals(seat.getLockedBy())) {
+                log.warn("lockSeats service seat already locked by another owner for eventId={} lockOwnerId={} idempotencyKey={} seatId={} lockedBy={}",
+                        eventId, lockOwnerId, idempotencyKey, seatId, seat.getLockedBy());
+                throw new SeatLockConflictException("Seat " + seatId + " is locked by another checkout");
             }
         }
 
         Instant lockExpiresAt = now.plus(LOCK_TTL);
         for (EventSeat seat : seats) {
             seat.setStatus(EventSeat.SeatStatus.LOCKED);
-            seat.setLockedBy(userId);
+            seat.setLockedBy(lockOwnerId);
             seat.setLockExpiresAt(lockExpiresAt);
         }
         // Persist lock state atomically inside this transaction.
@@ -259,14 +259,14 @@ public class EventSeatService {
             if (existingAfterRace.isPresent()) {
                 AllocationIdempotency existing = existingAfterRace.get();
                 if (!existing.getPayloadHash().equals(seatIdsHash)) {
-                    log.warn("lockSeats service idempotency race conflict for eventId={} userId={} idempotencyKey={}",
-                            eventId, userId, idempotencyKey);
+                    log.warn("lockSeats service idempotency race conflict for eventId={} lockOwnerId={} idempotencyKey={}",
+                            eventId, lockOwnerId, idempotencyKey);
                     throw new SeatLockConflictException("idempotencyKey was already used with a different seat list");
                 }
                 cacheResponsePayload(cacheKey, existing.getResponsePayload());
                 long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
-                log.info("lockSeats service idempotent replay after race for eventId={} userId={} idempotencyKey={} latencyMs={}",
-                        eventId, userId, idempotencyKey, latencyMs);
+                log.info("lockSeats service idempotent replay after race for eventId={} lockOwnerId={} idempotencyKey={} latencyMs={}",
+                        eventId, lockOwnerId, idempotencyKey, latencyMs);
                 return;
             }
             throw ex;
@@ -274,8 +274,8 @@ public class EventSeatService {
 
         cacheResponsePayload(cacheKey, responsePayload);
         long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
-        log.info("lockSeats service completed for eventId={} userId={} idempotencyKey={} lockedSeatCount={} latencyMs={}",
-                eventId, userId, idempotencyKey, seats.size(), latencyMs);
+        log.info("lockSeats service completed for eventId={} lockOwnerId={} idempotencyKey={} lockedSeatCount={} latencyMs={}",
+                eventId, lockOwnerId, idempotencyKey, seats.size(), latencyMs);
     }
 
     @Transactional

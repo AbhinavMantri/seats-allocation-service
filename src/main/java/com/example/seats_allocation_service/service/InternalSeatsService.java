@@ -45,8 +45,8 @@ public class InternalSeatsService {
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
 
-    public void lockSeats(UUID eventId, String idempotencyKey, UUID userId, List<UUID> seatIds) {
-        eventSeatService.lockSeats(eventId, idempotencyKey, userId, seatIds);
+    public void lockSeats(UUID eventId, String idempotencyKey, UUID lockOwnerId, List<UUID> seatIds) {
+        eventSeatService.lockSeats(eventId, idempotencyKey, lockOwnerId, seatIds);
     }
 
     @Transactional
