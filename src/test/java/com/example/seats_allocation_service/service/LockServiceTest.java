@@ -1,8 +1,11 @@
 package com.example.seats_allocation_service.service;
 
 import com.example.seats_allocation_service.dtos.LockDetail;
+import com.example.seats_allocation_service.exceptions.EventNotFoundException;
 import com.example.seats_allocation_service.exceptions.SeatsNotFoundException;
+import com.example.seats_allocation_service.models.EventInventoryContext;
 import com.example.seats_allocation_service.models.EventSeat;
+import com.example.seats_allocation_service.repository.EventInventoryContextRepository;
 import com.example.seats_allocation_service.repository.EventSeatRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,6 +28,9 @@ class LockServiceTest {
     @Mock
     private EventSeatRepository eventSeatRepository;
 
+    @Mock
+    private EventInventoryContextRepository eventInventoryContextRepository;
+
     @InjectMocks
     private LockService lockService;
 
@@ -39,17 +45,24 @@ class LockServiceTest {
         EventSeat activeSeatOne = lockedSeat(bookingId, eventId, firstSeatId, lockExpiresAt);
         EventSeat activeSeatTwo = lockedSeat(bookingId, eventId, secondSeatId, lockExpiresAt);
         EventSeat expiredSeat = lockedSeat(bookingId, eventId, UUID.randomUUID(), Instant.now().minusSeconds(60));
+        EventInventoryContext context = new EventInventoryContext();
+        context.setId(eventId);
+        context.setCurrency("USD");
         when(eventSeatRepository.findByLockedByAndStatus(bookingId, EventSeat.SeatStatus.LOCKED))
                 .thenReturn(List.of(activeSeatTwo, expiredSeat, activeSeatOne));
+        when(eventInventoryContextRepository.findById(eventId)).thenReturn(java.util.Optional.of(context));
 
         LockDetail result = lockService.getLockDetails(bookingId);
 
         assertEquals(bookingId, result.getBookingId());
         assertEquals(eventId, result.getEventId());
+        assertEquals(2, result.getSeats().size());
         assertEquals(
                 List.of(firstSeatId, secondSeatId).stream().sorted(Comparator.naturalOrder()).toList(),
-                result.getSeatIds()
+                result.getSeats().stream().map(seat -> seat.getEventSeatId()).toList()
         );
+        assertEquals(4000L, result.getTotalAmountMinor());
+        assertEquals("USD", result.getCurrency());
         assertEquals(lockExpiresAt.toString(), result.getLockExpiresAt());
         assertEquals("LOCKED", result.getStatus());
     }
@@ -67,6 +80,18 @@ class LockServiceTest {
                 .thenReturn(List.of(expiredSeat));
 
         assertThrows(SeatsNotFoundException.class, () -> lockService.getLockDetails(bookingId));
+    }
+
+    @Test
+    void getLockDetails_whenEventContextMissing_throwsEventNotFound() {
+        UUID bookingId = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
+        EventSeat activeSeat = lockedSeat(bookingId, eventId, UUID.randomUUID(), Instant.now().plusSeconds(300));
+        when(eventSeatRepository.findByLockedByAndStatus(bookingId, EventSeat.SeatStatus.LOCKED))
+                .thenReturn(List.of(activeSeat));
+        when(eventInventoryContextRepository.findById(eventId)).thenReturn(java.util.Optional.empty());
+
+        assertThrows(EventNotFoundException.class, () -> lockService.getLockDetails(bookingId));
     }
 
     private EventSeat lockedSeat(UUID bookingId, UUID eventId, UUID seatId, Instant lockExpiresAt) {

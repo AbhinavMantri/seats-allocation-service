@@ -42,7 +42,7 @@ public class LockController {
                 log.info("getLockDetails succeeded for bookingId={} eventId={} seatCount={} latencyMs={}",
                         bookingId,
                         lockDetail.getEventId(),
-                        lockDetail.getSeatIds() == null ? 0 : lockDetail.getSeatIds().size(),
+                        lockDetail.getSeats() == null ? 0 : lockDetail.getSeats().size(),
                         latencyMs);
                 return ResponseEntity.ok(response);
             } catch (SeatsNotFoundException e) {

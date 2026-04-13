@@ -386,6 +386,12 @@ Returns currently locked seats for a booking/cart.
 GET /internal/locks?bookingId={bookingId}
 ```
 
+### Behavior
+- Returns only active, non-expired locks for the booking
+- Resolves `currency` from the event inventory context for the locked event
+- Includes seat-level pricing details and an aggregated total in minor units
+- Returns `404 Not Found` when no active lock exists for the booking
+
 ### Success Response
 ```json
 {
@@ -394,14 +400,47 @@ GET /internal/locks?bookingId={bookingId}
   "result": {
     "bookingId": "ce10f1d8-f7c5-4e0a-a6d5-6c40b3376c0f",
     "eventId": "9c9a7b0f-bf09-4f91-9235-4a4bbf34f97b",
-    "seatIds": [
-      "5f84b7a0-2d91-4db6-bd54-43b2c2a4337f",
-      "b3cd59be-f47c-4513-91f2-5ef97afac5b9",
-      "dcab5f9f-5847-4f52-82df-f2616cbe0e39"
+    "seats": [
+      {
+        "eventSeatId": "5f84b7a0-2d91-4db6-bd54-43b2c2a4337f",
+        "sectionId": "6d4f7126-55f3-4a96-b4c0-c592b6eefb8d",
+        "priceCents": 2200
+      },
+      {
+        "eventSeatId": "b3cd59be-f47c-4513-91f2-5ef97afac5b9",
+        "sectionId": "6d4f7126-55f3-4a96-b4c0-c592b6eefb8d",
+        "priceCents": 1800
+      }
     ],
+    "totalAmountMinor": 4000,
+    "currency": "USD",
     "lockExpiresAt": "2026-03-16T15:50:00Z",
     "status": "LOCKED"
   }
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| bookingId | string (UUID) | Booking identifier that owns the lock |
+| eventId | string (UUID) | Event for the locked seats |
+| seats | array[object] | Locked seat details for the booking |
+| seats[].eventSeatId | string (UUID) | Locked event seat identifier |
+| seats[].sectionId | string (UUID) | Section the seat belongs to |
+| seats[].priceCents | integer | Seat price in minor units |
+| totalAmountMinor | long | Sum of `seats[].priceCents` |
+| currency | string | Event currency resolved from inventory context |
+| lockExpiresAt | string (ISO-8601 instant) | Expiration timestamp shared by the active lock set |
+| status | string | Current seat state, currently `LOCKED` |
+
+### Not Found Example
+**HTTP 404 Not Found**
+```json
+{
+  "status": "FAILURE",
+  "message": "No active lock found for bookingId: ce10f1d8-f7c5-4e0a-a6d5-6c40b3376c0f"
 }
 ```
 

@@ -2,6 +2,7 @@ package com.example.seats_allocation_service.controllers;
 
 import com.example.seats_allocation_service.dtos.LockDetail;
 import com.example.seats_allocation_service.dtos.LockDetailResponse;
+import com.example.seats_allocation_service.dtos.LockedSeatDetail;
 import com.example.seats_allocation_service.dtos.common.ResponseStatus;
 import com.example.seats_allocation_service.exceptions.SeatsNotFoundException;
 import com.example.seats_allocation_service.service.LockService;
@@ -38,7 +39,13 @@ class LockControllerTest {
         LockDetail lockDetail = LockDetail.builder()
                 .bookingId(bookingId)
                 .eventId(eventId)
-                .seatIds(List.of(seatId))
+                .seats(List.of(LockedSeatDetail.builder()
+                        .eventSeatId(seatId)
+                        .sectionId(UUID.randomUUID())
+                        .priceCents(2000)
+                        .build()))
+                .totalAmountMinor(2000L)
+                .currency("USD")
                 .lockExpiresAt("2026-03-21T10:15:30Z")
                 .status("LOCKED")
                 .build();

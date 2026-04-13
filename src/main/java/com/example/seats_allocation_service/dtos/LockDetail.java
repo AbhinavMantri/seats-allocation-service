@@ -11,7 +11,9 @@ import lombok.Data;
 public class LockDetail {
     private UUID bookingId;
     private UUID eventId;
-    private List<UUID> seatIds;
+    private List<LockedSeatDetail> seats;
+    private Long totalAmountMinor;
+    private String currency;
     private String lockExpiresAt;
     private String status;
 }

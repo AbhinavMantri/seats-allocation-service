@@ -127,6 +127,44 @@ Releases locked seats if payment fails or booking expires.
 
 ------------------------------------------------------------------------
 
+### 6. Get Lock Details
+
+Fetches the active lock for a booking, including seat-level pricing and the
+aggregated total amount.
+
+    GET /internal/locks?bookingId={bookingId}
+
+Response:
+
+``` json
+{
+  "status": "SUCCESS",
+  "message": "Lock details fetched successfully",
+  "result": {
+    "bookingId": "ce10f1d8-f7c5-4e0a-a6d5-6c40b3376c0f",
+    "eventId": "9c9a7b0f-bf09-4f91-9235-4a4bbf34f97b",
+    "seats": [
+      {
+        "eventSeatId": "5f84b7a0-2d91-4db6-bd54-43b2c2a4337f",
+        "sectionId": "6d4f7126-55f3-4a96-b4c0-c592b6eefb8d",
+        "priceCents": 2200
+      },
+      {
+        "eventSeatId": "b3cd59be-f47c-4513-91f2-5ef97afac5b9",
+        "sectionId": "6d4f7126-55f3-4a96-b4c0-c592b6eefb8d",
+        "priceCents": 1800
+      }
+    ],
+    "totalAmountMinor": 4000,
+    "currency": "USD",
+    "lockExpiresAt": "2026-03-16T15:50:00Z",
+    "status": "LOCKED"
+  }
+}
+```
+
+------------------------------------------------------------------------
+
 ## Kafka Events
 
 ### InventoryInitRequested

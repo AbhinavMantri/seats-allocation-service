@@ -9,8 +9,11 @@ import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 
 import com.example.seats_allocation_service.dtos.LockDetail;
+import com.example.seats_allocation_service.dtos.LockedSeatDetail;
+import com.example.seats_allocation_service.exceptions.EventNotFoundException;
 import com.example.seats_allocation_service.exceptions.SeatsNotFoundException;
 import com.example.seats_allocation_service.models.EventSeat;
+import com.example.seats_allocation_service.repository.EventInventoryContextRepository;
 import com.example.seats_allocation_service.repository.EventSeatRepository;
 
 import lombok.RequiredArgsConstructor;
@@ -21,6 +24,7 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class LockService {
     private final EventSeatRepository eventSeatRepository;
+    private final EventInventoryContextRepository eventInventoryContextRepository;
 
     public LockDetail getLockDetails(UUID bookingId) {
         try (MDC.MDCCloseable ignored = MDC.putCloseable("logGroup", "internal-locks-get")) {
@@ -41,10 +45,26 @@ public class LockService {
             }
 
             EventSeat firstSeat = lockedSeats.get(0);
+            String currency = eventInventoryContextRepository.findById(firstSeat.getEventId())
+                    .map(context -> context.getCurrency())
+                    .orElseThrow(() -> new EventNotFoundException("Event not found for eventId: " + firstSeat.getEventId()));
+            List<LockedSeatDetail> seatDetails = lockedSeats.stream()
+                    .map(seat -> LockedSeatDetail.builder()
+                            .eventSeatId(seat.getId())
+                            .sectionId(seat.getSectionId())
+                            .priceCents(seat.getPriceCents())
+                            .build())
+                    .toList();
+            long totalAmountMinor = lockedSeats.stream()
+                    .map(EventSeat::getPriceCents)
+                    .mapToLong(Integer::longValue)
+                    .sum();
             LockDetail lockDetail = LockDetail.builder()
                     .bookingId(bookingId)
                     .eventId(firstSeat.getEventId())
-                    .seatIds(lockedSeats.stream().map(EventSeat::getId).toList())
+                    .seats(seatDetails)
+                    .totalAmountMinor(totalAmountMinor)
+                    .currency(currency)
                     .lockExpiresAt(firstSeat.getLockExpiresAt().toString())
                     .status(firstSeat.getStatus().name())
                     .build();
@@ -53,7 +73,7 @@ public class LockService {
             log.info("getLockDetails service completed for bookingId={} eventId={} seatCount={} lockExpiresAt={} latencyMs={}",
                     bookingId,
                     lockDetail.getEventId(),
-                    lockDetail.getSeatIds().size(),
+                    lockDetail.getSeats().size(),
                     lockDetail.getLockExpiresAt(),
                     latencyMs);
             return lockDetail;
