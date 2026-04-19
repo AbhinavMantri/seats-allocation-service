@@ -243,15 +243,9 @@ public class EventSeatService {
         String successMessage = "Locked " + seats.size() + " seat(s) until " + lockExpiresAt;
         String responsePayload = serializeSuccessfulResponsePayload(successMessage);
 
-        AllocationIdempotency idempotency = new AllocationIdempotency();
-        idempotency.setOperationType(OPERATION_SEAT_LOCK);
-        idempotency.setResourceId(eventId);
-        idempotency.setIdempotencyKey(internalIdempotencyKey);
-        idempotency.setPayloadHash(seatIdsHash);
-        idempotency.setResponsePayload(responsePayload);
         try {
             // Save idempotency outcome so retries can be replayed safely.
-            allocationIdempotencyRepository.save(idempotency);
+            allocationIdempotencyRepository.insertRecord(OPERATION_SEAT_LOCK, eventId, internalIdempotencyKey, seatIdsHash, responsePayload);
         } catch (DataIntegrityViolationException ex) {
             // Handle race where another request with same key inserted first.
             Optional<AllocationIdempotency> existingAfterRace =

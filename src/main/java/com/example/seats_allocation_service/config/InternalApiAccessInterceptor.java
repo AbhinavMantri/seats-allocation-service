@@ -45,7 +45,7 @@ public class InternalApiAccessInterceptor implements HandlerInterceptor {
                 request.getHeader(HEADER_SERVICE_NAME),
                 request.getHeader(HEADER_SERVICE_TOKEN)
         );
-        if (request.getRequestURI().startsWith("/internal/seats/") && trustedService) {
+        if (request.getServletPath().startsWith("/internal/seats/") && trustedService) {
             return true;
         }
 

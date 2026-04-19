@@ -192,12 +192,15 @@ class EventSeatServiceTest {
         assertNotNull(seat.getLockExpiresAt());
         verify(eventSeatRepository).saveAll(List.of(seat));
 
-        ArgumentCaptor<AllocationIdempotency> captor = ArgumentCaptor.forClass(AllocationIdempotency.class);
-        verify(allocationIdempotencyRepository).save(captor.capture());
-        assertEquals("SEAT_LOCK", captor.getValue().getOperationType());
-        assertEquals(eventId, captor.getValue().getResourceId());
-        assertEquals(userId + ":idem", captor.getValue().getIdempotencyKey());
-        assertNotNull(captor.getValue().getResponsePayload());
+        ArgumentCaptor<String> responseCaptor = ArgumentCaptor.forClass(String.class);
+        verify(allocationIdempotencyRepository).insertRecord(
+                eq("SEAT_LOCK"),
+                eq(eventId),
+                eq(userId + ":idem"),
+                anyString(),
+                responseCaptor.capture()
+        );
+        assertNotNull(responseCaptor.getValue());
     }
 
     @Test

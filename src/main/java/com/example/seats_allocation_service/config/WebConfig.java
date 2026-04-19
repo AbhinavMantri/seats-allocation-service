@@ -19,7 +19,6 @@ public class WebConfig implements WebMvcConfigurer {
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(internalApiAccessInterceptor)
-                .addPathPatterns("/events/**")
                 .addPathPatterns("/internal/seats/**");
     }
 

@@ -87,20 +87,16 @@ class EventInventoryServiceTest {
         request.setPricing(Set.of(pricing));
 
         when(eventInventoryContextRepository.existsById(eventId)).thenReturn(false);
-        when(eventInventoryContextRepository.save(any(EventInventoryContext.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(eventInventoryContextRepository.insertContext(eventId, venueId, "USD")).thenReturn(1);
 
         EventInventoryContext result = eventInventoryService.initializeInventory(eventId, request);
 
-        ArgumentCaptor<EventInventoryContext> contextCaptor = ArgumentCaptor.forClass(EventInventoryContext.class);
-        verify(eventInventoryContextRepository).save(contextCaptor.capture());
-        EventInventoryContext saved = contextCaptor.getValue();
-        assertEquals(eventId, saved.getId());
-        assertEquals(venueId, saved.getVenueId());
-        assertEquals("USD", saved.getCurrency());
+        verify(eventInventoryContextRepository).insertContext(eventId, venueId, "USD");
 
         assertNotNull(result);
         assertEquals(eventId, result.getId());
+        assertEquals(venueId, result.getVenueId());
+        assertEquals("USD", result.getCurrency());
         verify(eventSeatService).initializeInventory(eventId, request.getPricing());
     }
 
@@ -114,17 +110,14 @@ class EventInventoryServiceTest {
         request.setCurrency("INR");
         request.setPricing(null);
 
-        EventInventoryContext persisted = new EventInventoryContext();
-        persisted.setId(eventId);
-        persisted.setVenueId(venueId);
-        persisted.setCurrency("INR");
-
         when(eventInventoryContextRepository.existsById(eventId)).thenReturn(false);
-        when(eventInventoryContextRepository.save(any(EventInventoryContext.class))).thenReturn(persisted);
+        when(eventInventoryContextRepository.insertContext(eventId, venueId, "INR")).thenReturn(1);
 
         EventInventoryContext result = eventInventoryService.initializeInventory(eventId, request);
 
-        assertSame(persisted, result);
+        assertEquals(eventId, result.getId());
+        assertEquals(venueId, result.getVenueId());
+        assertEquals("INR", result.getCurrency());
         verify(eventSeatService, never()).initializeInventory(any(UUID.class), any());
     }
 
@@ -140,7 +133,7 @@ class EventInventoryServiceTest {
                 () -> eventInventoryService.initializeInventory(eventId, request)
         );
 
-        verify(eventInventoryContextRepository, never()).save(any(EventInventoryContext.class));
+        verify(eventInventoryContextRepository, never()).insertContext(any(UUID.class), any(UUID.class), anyString());
         verify(eventSeatService, never()).initializeInventory(any(UUID.class), any());
     }
 
@@ -167,8 +160,7 @@ class EventInventoryServiceTest {
         event.setSeats(java.util.List.of(seat));
 
         when(eventInventoryContextRepository.existsById(eventId)).thenReturn(false);
-        when(eventInventoryContextRepository.save(any(EventInventoryContext.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(eventInventoryContextRepository.insertContext(eventId, venueId, "INR")).thenReturn(1);
 
         EventInventoryContext result = eventInventoryService.initializeInventory(event);
 
@@ -220,7 +212,7 @@ class EventInventoryServiceTest {
         assertEquals(stored.getId(), result.getId());
         assertEquals(stored.getVenueId(), result.getVenueId());
         assertEquals(stored.getCurrency(), result.getCurrency());
-        verify(eventInventoryContextRepository, never()).save(any(EventInventoryContext.class));
+        verify(eventInventoryContextRepository, never()).insertContext(any(UUID.class), any(UUID.class), anyString());
         verify(eventSeatService, never()).initializeInventory(any(UUID.class), any());
     }
 
@@ -263,7 +255,7 @@ class EventInventoryServiceTest {
         assertEquals(stored.getVenueId(), result.getVenueId());
         assertEquals(stored.getCurrency(), result.getCurrency());
         verify(allocationIdempotencyRepository, never()).findByOperationTypeAndResourceIdAndIdempotencyKey(anyString(), any(UUID.class), anyString());
-        verify(eventInventoryContextRepository, never()).save(any(EventInventoryContext.class));
+        verify(eventInventoryContextRepository, never()).insertContext(any(UUID.class), any(UUID.class), anyString());
     }
 
     @Test
@@ -297,7 +289,7 @@ class EventInventoryServiceTest {
                 .thenReturn(java.util.Optional.of(idempotency));
 
         assertThrows(IdempotencyConflictException.class, () -> eventInventoryService.initializeInventory(event));
-        verify(eventInventoryContextRepository, never()).save(any(EventInventoryContext.class));
+        verify(eventInventoryContextRepository, never()).insertContext(any(UUID.class), any(UUID.class), anyString());
         verify(eventSeatService, never()).initializeInventory(any(UUID.class), any());
     }
 

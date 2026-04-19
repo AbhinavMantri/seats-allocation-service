@@ -224,14 +224,8 @@ public class InternalSeatsService {
 
     private void cacheIdempotentResponse(String operationType, UUID resourceId, String idempotencyKey, String payloadHash, String cacheKey, Object response) {
         String responsePayload = writeResponse(response);
-        AllocationIdempotency idempotency = new AllocationIdempotency();
-        idempotency.setOperationType(operationType);
-        idempotency.setResourceId(resourceId);
-        idempotency.setIdempotencyKey(idempotencyKey);
-        idempotency.setPayloadHash(payloadHash);
-        idempotency.setResponsePayload(responsePayload);
         try {
-            allocationIdempotencyRepository.save(idempotency);
+            allocationIdempotencyRepository.insertRecord(operationType, resourceId, idempotencyKey, payloadHash, responsePayload);
         } catch (DataIntegrityViolationException ex) {
             log.info("Idempotency record already persisted for operationType={} resourceId={} idempotencyKey={}",
                     operationType, resourceId, idempotencyKey);

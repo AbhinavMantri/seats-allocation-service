@@ -58,6 +58,7 @@ public class EventInventoryService {
         this.defaultCurrency = defaultCurrency;
     }
 
+    @Transactional
     public EventInventoryContext initializeInventory(InventoryInitRequestedEvent event) throws EventInventoryAlreadyExistsException {
         String payloadHash = hashPayload(
                 event.getEventId(),
@@ -98,11 +99,11 @@ public class EventInventoryService {
             if (eventInventoryContextRepository.existsById(eventId)) {
                 throw new EventInventoryAlreadyExistsException("Event inventory context already exists for eventId: " + eventId);
             }
-            EventInventoryContext eventInventoryContext = new EventInventoryContext();
-            eventInventoryContext.setId(eventId);
-            eventInventoryContext.setVenueId(request.getVenueId());
-            eventInventoryContext.setCurrency(request.getCurrency());
-            EventInventoryContext savedContext = eventInventoryContextRepository.save(eventInventoryContext);
+            eventInventoryContextRepository.insertContext(eventId, request.getVenueId(), request.getCurrency());
+            EventInventoryContext savedContext = new EventInventoryContext();
+            savedContext.setId(eventId);
+            savedContext.setVenueId(request.getVenueId());
+            savedContext.setCurrency(request.getCurrency());
 
             Set<InventoryPricing> pricing = request.getPricing();
             if (pricing != null && !pricing.isEmpty()) {
@@ -116,14 +117,8 @@ public class EventInventoryService {
 
     private void cacheIdempotentResponse(String operationType, UUID resourceId, String idempotencyKey, String payloadHash, String cacheKey, Object response) {
         String responsePayload = writeResponse(response);
-        AllocationIdempotency idempotency = new AllocationIdempotency();
-        idempotency.setOperationType(operationType);
-        idempotency.setResourceId(resourceId);
-        idempotency.setIdempotencyKey(idempotencyKey);
-        idempotency.setPayloadHash(payloadHash);
-        idempotency.setResponsePayload(responsePayload);
         try {
-            allocationIdempotencyRepository.save(idempotency);
+            allocationIdempotencyRepository.insertRecord(operationType, resourceId, idempotencyKey, payloadHash, responsePayload);
         } catch (DataIntegrityViolationException ignored) {
             log.info("Idempotency record already persisted for operationType={} resourceId={} idempotencyKey={}",
                     operationType, resourceId, idempotencyKey);
