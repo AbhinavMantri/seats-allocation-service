@@ -16,7 +16,7 @@ import java.util.UUID;
 @Data
 public class BaseEntity {
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
     @Column(name = "created_at", nullable = false, updatable = false)
