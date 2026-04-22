@@ -1,0 +1,175 @@
+package com.example.seats_allocation_service.controllers;
+
+import com.example.seats_allocation_service.dtos.EventListResponse;
+import com.example.seats_allocation_service.dtos.SeatAvailabilityResponse;
+import com.example.seats_allocation_service.dtos.LockSeatsRequest;
+import com.example.seats_allocation_service.dtos.ReleaseLocksRequest;
+import com.example.seats_allocation_service.dtos.common.ApiResponse;
+import com.example.seats_allocation_service.dtos.common.ResponseStatus;
+import com.example.seats_allocation_service.exceptions.EventNotFoundException;
+import com.example.seats_allocation_service.exceptions.SeatLockConflictException;
+import com.example.seats_allocation_service.exceptions.SeatsNotFoundException;
+import com.example.seats_allocation_service.models.EventSeat;
+import com.example.seats_allocation_service.service.EventSeatService;
+
+import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import jakarta.validation.Valid;
+
+import java.util.List;
+import java.util.UUID;
+import java.util.function.Supplier;
+
+@RestController
+@RequestMapping("/events/{eventId}")
+@Slf4j
+public class EventSeatsController {
+    private final EventSeatService eventSeatService;
+
+    @Autowired
+    public EventSeatsController(EventSeatService eventSeatService) {
+        this.eventSeatService = eventSeatService;
+    }
+
+    @GetMapping("/seats")
+    public ResponseEntity<EventListResponse> getSeats(@PathVariable UUID eventId) {
+        return withLogGroup("event-seats-get", () -> {
+            long startTimeNanos = System.nanoTime();
+            log.info("getSeats request received for eventId={}", eventId);
+            EventListResponse response = new EventListResponse();
+            try {
+                List<EventSeat> seats = eventSeatService.getSeats(eventId);
+                response.setSeats(seats);
+                response.setStatus(ResponseStatus.SUCCESS);
+                response.setMessage("Seat availability fetched successfully");
+                long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
+                log.info("getSeats succeeded for eventId={} with seatCount={} latencyMs={}", eventId, seats == null ? 0 : seats.size(), latencyMs);
+                return ResponseEntity.ok(response);
+            } catch (EventNotFoundException e) {
+                response.setStatus(ResponseStatus.FAILURE);
+                response.setMessage(e.getMessage());
+                long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
+                log.warn("getSeats failed for eventId={} reason={} latencyMs={}", eventId, e.getMessage(), latencyMs);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+            }
+        });
+    }
+
+    @GetMapping("/seats/availability")
+    public ResponseEntity<SeatAvailabilityResponse> getAvailabilitySummary(@PathVariable UUID eventId) {
+        return withLogGroup("event-seats-availability", () -> {
+            long startTimeNanos = System.nanoTime();
+            log.info("seat availablity summary request received for eventId={}", eventId);
+            try {
+                SeatAvailabilityResponse response = eventSeatService.getAvailabilitySummary(eventId);
+                response.setStatus(ResponseStatus.SUCCESS);
+                response.setMessage("Seat availability summary fetched successfully");
+                long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
+                log.info("seat availablity summary succeeded for eventId={} totalSeats={} availableSeats={} lockedSeats={} latencyMs={}",
+                        eventId, response.getTotalSeats(), response.getAvailableSeats(), response.getLockedSeats(), latencyMs);
+                return ResponseEntity.ok(response);
+            } catch (EventNotFoundException e) {
+                SeatAvailabilityResponse response = new SeatAvailabilityResponse();
+                setFailureResponse(e.getMessage(), response);
+                long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
+                log.warn("seat availablity summary failed: event not found for eventId={} reason={} latencyMs={}",
+                        eventId, e.getMessage(), latencyMs);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+            } catch (Exception e) {
+                SeatAvailabilityResponse response = new SeatAvailabilityResponse();
+                setFailureResponse("Failed to fetch seat availability summary", response);
+                long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
+                log.error("seat availablity summary failed unexpectedly for eventId={} latencyMs={}", eventId, latencyMs, e);
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+            }
+        });
+    }
+
+    @PostMapping("/locks")
+    public ResponseEntity<ApiResponse> lockSeats(@PathVariable UUID eventId, @RequestBody @Valid LockSeatsRequest request) {
+        return withLogGroup("event-seats-lock", () -> {
+            long startTimeNanos = System.nanoTime();
+            UUID lockOwnerId = request.getBookingId() == null ? request.getUserId() : request.getBookingId();
+            log.info("lockSeats request received for eventId={} lockOwnerId={} requestedSeatCount={} idempotencyKey={}",
+                    eventId, lockOwnerId, request.getSeatIds() == null ? 0 : request.getSeatIds().size(), request.getIdempotencyKey());
+            ApiResponse response = new ApiResponse();
+            try {
+                eventSeatService.lockSeats(eventId, request.getIdempotencyKey(), lockOwnerId, request.getSeatIds());
+                response.setStatus(ResponseStatus.SUCCESS);
+                response.setMessage("Seats locked successfully");
+                long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
+                log.info("lockSeats succeeded for eventId={} lockOwnerId={} idempotencyKey={} latencyMs={}",
+                        eventId, lockOwnerId, request.getIdempotencyKey(), latencyMs);
+                return ResponseEntity.ok(response);
+            } catch (EventNotFoundException e) {
+                response.setStatus(ResponseStatus.FAILURE);
+                response.setMessage(e.getMessage());
+                long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
+                log.warn("lockSeats failed: event not found for eventId={} lockOwnerId={} idempotencyKey={} reason={} latencyMs={}",
+                        eventId, lockOwnerId, request.getIdempotencyKey(), e.getMessage(), latencyMs);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+            } catch (SeatsNotFoundException | SeatLockConflictException e) {
+                response.setStatus(ResponseStatus.FAILURE);
+                response.setMessage(e.getMessage());
+                long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
+                log.warn("lockSeats failed: conflict for eventId={} lockOwnerId={} idempotencyKey={} reason={} latencyMs={}",
+                        eventId, lockOwnerId, request.getIdempotencyKey(), e.getMessage(), latencyMs);
+                return ResponseEntity.status(HttpStatus.CONFLICT).body(response);
+            }
+        });
+    }
+
+    @PostMapping("/locks/release")
+    public ResponseEntity<ApiResponse> releaseLocks(@PathVariable UUID eventId, @RequestBody @Valid ReleaseLocksRequest request) {
+        return withLogGroup("event-seats-release", () -> {
+            long startTimeNanos = System.nanoTime();
+            log.info("releaseLocks request received for eventId={} userId={} requestedSeatCount={}",
+                    eventId, request.getUserId(), request.getSeatIds() == null ? 0 : request.getSeatIds().size());
+            ApiResponse response = new ApiResponse();
+            try {
+                int releasedCount = eventSeatService.releaseLocks(eventId, request.getUserId(), request.getSeatIds());
+                response.setStatus(ResponseStatus.SUCCESS);
+                response.setMessage("Released " + releasedCount + " seat lock(s)");
+                long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
+                log.info("releaseLocks succeeded for eventId={} userId={} releasedCount={} latencyMs={}",
+                        eventId, request.getUserId(), releasedCount, latencyMs);
+                return ResponseEntity.ok(response);
+            } catch (EventNotFoundException e) {
+                response.setStatus(ResponseStatus.FAILURE);
+                response.setMessage(e.getMessage());
+                long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
+                log.warn("releaseLocks failed: event not found for eventId={} userId={} reason={} latencyMs={}",
+                        eventId, request.getUserId(), e.getMessage(), latencyMs);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+            } catch (SeatsNotFoundException e) {
+                response.setStatus(ResponseStatus.FAILURE);
+                response.setMessage(e.getMessage());
+                long latencyMs = (System.nanoTime() - startTimeNanos) / 1_000_000;
+                log.warn("releaseLocks failed: seats not found for eventId={} userId={} reason={} latencyMs={}",
+                        eventId, request.getUserId(), e.getMessage(), latencyMs);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+            }
+        });
+    }
+
+    private <T extends ApiResponse> void setFailureResponse(String message, T response) {
+        response.setStatus(ResponseStatus.FAILURE);
+        response.setMessage(message);
+    }
+
+    private <T> T withLogGroup(String logGroup, Supplier<T> operation) {
+        try (MDC.MDCCloseable ignored = MDC.putCloseable("logGroup", logGroup)) {
+            return operation.get();
+        }
+    }
+}

@@ -1,0 +1,12 @@
+.git
+.idea
+.mvn/wrapper/maven-wrapper.jar
+.m2
+*.iml
+*.log
+buildspec.yml
+README.md
+readme.md
+api.md
+HELP.md
+scripts
