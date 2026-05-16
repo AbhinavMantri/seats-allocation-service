@@ -19,11 +19,11 @@ This document covers:
 - **Protocol:** HTTP/HTTPS
 - **Data Format:** JSON
 - **Auth Type:**
-  - Internal APIs: service-to-service authentication (JWT / mTLS / API gateway)
-  - Read/query APIs: public or protected depending on product requirements
+  - Internal APIs: trusted service headers, with JWT role checks on selected paths
+  - Read/query APIs: JWT protected in the current application filter setup
 - **Base Path (current implementation):**
   ```text
-  /
+  /seats-allocation-service/v1
   ```
 
 ---
@@ -47,8 +47,8 @@ This document covers:
 | AVAILABLE | Seat is free and can be selected |
 | LOCKED | Seat is temporarily reserved for an in-progress booking |
 | BOOKED | Seat is sold / confirmed |
-| BLOCKED | Seat is not sellable due to ops/maintenance/business rule |
-| RELEASED | Logical transition state for audit/eventing; usually becomes AVAILABLE again |
+
+Release is represented as a transition back to `AVAILABLE`; `RELEASED` is not stored as a seat state in the current schema.
 
 ---
 
@@ -57,15 +57,16 @@ This document covers:
 ### Required for Internal APIs
 ```http
 Content-Type: application/json
-Authorization: Bearer <service-token>
-X-Request-Id: <unique-request-id>
-X-Idempotency-Key: <unique-idempotency-key>   // required for write APIs
+X-Service-Name: <configured-service-name>
+X-Service-Token: <configured-service-token>
+Authorization: Bearer <jwt>                   // required on selected internal paths
+X-Idempotency-Key: <unique-idempotency-key>    // required for confirm/release APIs
 ```
 
 ### Recommended for Public Query APIs
 ```http
 Content-Type: application/json
-X-Request-Id: <unique-request-id>
+Authorization: Bearer <jwt>
 ```
 
 ---
@@ -150,14 +151,7 @@ Returns seat-level state for rendering a seat map UI.
 GET /events/{eventId}/seats
 ```
 
-### Optional Query Params
-
-| Param | Type | Description |
-|---|---|---|
-| sectionId | string | Filter by section |
-| includeLockedBySelf | boolean | Whether to include caller-owned locks specially |
-| page | integer | Pagination for large venues |
-| size | integer | Page size |
+The current implementation returns the event seat list for the event. Section filtering and pagination are not implemented yet.
 
 ### Success Response
 ```json
@@ -203,12 +197,13 @@ POST /internal/seats/{eventId}/locks
 ### Request
 ```json
 {
-  "eventId": "evt_1001",
-  "bookingId": "bk_9001",
-  "userId": "usr_77",
-  "seatIds": ["A1", "A2", "A3"],
-  "lockDurationSeconds": 600,
-  "channel": "WEB"
+  "bookingId": "ce10f1d8-f7c5-4e0a-a6d5-6c40b3376c0f",
+  "userId": "c3f71a61-f86e-41c7-9efb-15f6df92ed87",
+  "idempotencyKey": "lock-req-001",
+  "seatIds": [
+    "5f84b7a0-2d91-4db6-bd54-43b2c2a4337f",
+    "b3cd59be-f47c-4513-91f2-5ef97afac5b9"
+  ]
 }
 ```
 
@@ -216,12 +211,10 @@ POST /internal/seats/{eventId}/locks
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| eventId | string | yes | Event identifier |
-| bookingId | string | yes | Booking/cart identifier |
-| userId | string | no | End user identifier |
-| seatIds | array[string] | yes | Seat ids to lock |
-| lockDurationSeconds | integer | no | Lock TTL |
-| channel | string | no | Booking channel |
+| bookingId | string UUID | no | Booking/cart identifier; used as lock owner when present |
+| userId | string UUID | yes | End user identifier |
+| idempotencyKey | string | yes | Idempotency key for replay/conflict handling |
+| seatIds | array[string UUID] | yes | Event seat IDs to lock |
 
 ### Success Response
 **HTTP 200 OK**
@@ -477,10 +470,11 @@ GET /actuator/health
 ## Seat Lock
 - `seatIds` must not be empty
 - all seat ids must belong to same event
-- lock request should be atomic
+- lock request is atomic for the requested seat set
 - requested seats must be `AVAILABLE`
-- `bookingId` is mandatory
-- lock TTL should respect configured max/min limits
+- `userId` is mandatory
+- `bookingId` is optional; when present, it becomes the lock owner
+- lock TTL is currently fixed at 10 minutes in code
 
 ## Seat Confirm
 - all seats must be locked by same booking
@@ -624,14 +618,13 @@ inventory-published.v1
 
 ---
 
-# Open Design Decisions
+# Current Design Decisions
 
-These should be finalized while implementing:
-1. Whether seat lock is fully DB-driven or DB + Redis hybrid
-2. Whether availability reads come from PostgreSQL, Redis, or pre-aggregated cache
-3. Whether partial seat lock success is allowed or request must remain atomic
-4. Whether cancel moves seats to AVAILABLE immediately or through refund settlement workflow
-5. Whether general-admission inventory lives in same schema or separate capacity table
+1. Seat state is PostgreSQL-authoritative; Redis is used for short-lived cache/replay only.
+2. Availability reads are currently computed from PostgreSQL seat rows.
+3. Seat lock requests are atomic for the requested seat set.
+4. Release moves eligible locked/booked seats back to `AVAILABLE`.
+5. General-admission capacity is not modeled in this repository yet.
 
 ---
 

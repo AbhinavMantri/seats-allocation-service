@@ -1,322 +1,212 @@
-# Seat Allocation Service
+# Seats Allocation Service
 
-## Overview
+Spring Boot microservice for event-level seat inventory, availability reads, lock-before-pay checkout protection, seat confirmation, release handling, and Kafka-based inventory initialization.
 
-The **Seat Allocation Service** is responsible for managing seat
-inventory for events. It initializes seat inventory, allocates seats
-during ticket booking, releases seats on cancellation, and ensures
-consistency across the ticketing system.
+This repository is part of the Ticketmaster-style backend platform. It owns the consistency boundary around event seats: which seats exist for an event, which seats are currently available, which seats are temporarily locked for checkout, and which seats are booked after payment succeeds.
 
-This service works closely with: - **Event Management Service** (creates
-events and triggers inventory initialization) - **Booking/Ticket
-Service** (requests seat allocation) - **Payment Service** (finalizes
-allocation after successful payment)
+## Where It Fits
 
-Communication between services can be **synchronous for critical
-operations** and **asynchronous via Kafka for background workflows**.
-
-------------------------------------------------------------------------
-
-## Responsibilities
-
--   Initialize seat inventory for a newly created event
--   Allocate seats during booking
--   Lock seats temporarily during payment
--   Release seats if payment fails or booking expires
--   Provide seat availability information
--   Maintain seat status consistency
-
-------------------------------------------------------------------------
-
-## Architecture
-
-    Event Service
-         |
-         |  (InventoryInitRequested - Kafka)
-         v
-    Seat Allocation Service
-         |
-         |---- PostgreSQL (Seat inventory)
-         |
-         |---- Redis (Seat locks / temporary reservations)
-         |
-         v
-    Booking Service
-
-------------------------------------------------------------------------
-
-## Technology Stack
-
--   **Language:** Java
--   **Framework:** Spring Boot
--   **Database:** PostgreSQL
--   **Cache:** Redis
--   **Messaging:** Kafka
--   **Containerization:** Docker
--   **Build Tool:** Maven
-
-------------------------------------------------------------------------
-
-## Seat States
-
-  State       Description
-  ----------- ---------------------------------------------
-  AVAILABLE   Seat is free for booking
-  LOCKED      Temporarily reserved during booking/payment
-  BOOKED      Successfully purchased
-  RELEASED    Seat released after cancellation or timeout
-
-------------------------------------------------------------------------
-
-## Core APIs
-
-### 1. Initialize Inventory
-
-Inventory initialization is currently triggered asynchronously by Kafka.
-There is no REST `POST /internal/inventory/init` endpoint in the current
-implementation.
-
-------------------------------------------------------------------------
-
-### 2. Get Seat Availability
-
-    GET /events/{eventId}/seats
-
-Response:
-
-``` json
-{
-  "eventId": "evt_123",
-  "availableSeats": 450,
-  "lockedSeats": 20,
-  "bookedSeats": 30
-}
+```text
+event-management-service
+      |
+      | inventory-init.v1
+      v
+Kafka
+      |
+      v
+seats-allocation-service
+      |
+      | lock / confirm / release / lock details
+      v
+booking-service + payment flow
 ```
 
-------------------------------------------------------------------------
+Kafka is used for inventory initialization only:
 
-### 3. Lock Seats
+`event-management-service -> Kafka -> seats-allocation-service`
 
-Temporarily locks seats during checkout.
+Checkout-time locking, confirmation, release, and lock lookup are synchronous service APIs because those paths need immediate consistency feedback.
 
-    POST /internal/seats/lock
+## What It Does Today
 
-``` json
-{
-  "eventId": "evt_123",
-  "seatIds": ["A1","A2","A3"],
-  "bookingId": "bk_987"
-}
+- Consumes `inventory-init.v1` events from Kafka.
+- Creates one `event_inventory_context` row per event.
+- Creates event-level seat inventory in `event_seats`.
+- Publishes `inventory-published.v1` after successful inventory initialization.
+- Exposes seat map and availability summary APIs.
+- Locks seats for checkout with a 10-minute TTL.
+- Uses PostgreSQL pessimistic row locks when locking, confirming, or releasing seats.
+- Uses idempotency records for lock, confirm, release, and inventory initialization operations.
+- Uses Redis as a short-lived cache for seat maps and idempotent response replay.
+- Confirms locked seats into `BOOKED` after payment/booking success.
+- Releases locked or booked seats for failure, cancellation, timeout, or recovery flows.
+- Exposes lock details for downstream payment amount calculation.
+- Logs important state transitions with latency and request context.
+
+## Core Components
+
+| Component | Responsibility |
+| --- | --- |
+| `InternalEventInventoryController` | Kafka listener for inventory initialization and publisher for inventory initialized events |
+| `EventInventoryService` | Event inventory context creation, inventory-init idempotency, currency resolution |
+| `EventSeatService` | Seat map reads, availability summary, lock and user-release operations |
+| `InternalSeatsService` | Internal confirm/release flows with idempotent replay |
+| `LockService` | Active lock lookup for booking/payment workflows |
+| `EventSeatRepository` | Seat persistence and pessimistic row locks |
+| `AllocationIdempotencyRepository` | Durable idempotency records |
+| `InternalApiAccessInterceptor` | Service-token/JWT role checks for internal APIs |
+
+## Seat State Model
+
+Supported seat states:
+
+- `AVAILABLE`: seat can be selected and locked.
+- `LOCKED`: seat is temporarily reserved for a checkout owner until `lockExpiresAt`.
+- `BOOKED`: seat has been confirmed for a booking.
+
+The current schema intentionally keeps the state model small. Release is handled as a transition back to `AVAILABLE`, not as a stored `RELEASED` state.
+
+## Inventory Initialization
+
+`event-management-service` publishes `inventory-init.v1` when event inventory should be created.
+
+The service consumes that event, resolves currency, creates the event inventory context, creates event seat rows, and publishes `inventory-published.v1`.
+
+Important behavior:
+
+- `requestId` is used as the idempotency key for inventory initialization.
+- A repeated event with the same payload is replayed safely.
+- A repeated event with the same key but different payload is rejected as an idempotency conflict.
+- Redis is used as a fast replay cache; PostgreSQL remains the durable idempotency source.
+
+## Lock-Before-Pay Flow
+
+1. Booking or checkout calls the lock API with event ID, seat IDs, user/booking owner, and idempotency key.
+2. The service de-duplicates seat IDs and calculates a payload hash.
+3. Existing idempotency records are checked before mutating state.
+4. Requested seat rows are loaded with `PESSIMISTIC_WRITE`.
+5. If any requested seat is booked or actively locked by another owner, the request fails.
+6. If all seats are valid, they move to `LOCKED` with `lockedBy` and `lockExpiresAt`.
+7. Payment can use lock details to calculate amount/currency from the locked seats.
+8. After payment success, internal confirmation moves the seats to `BOOKED`.
+9. Failed, cancelled, or recovery flows release seats back to `AVAILABLE`.
+
+This design keeps double-booking protection close to the seat inventory table rather than relying on payment or booking services to infer seat state.
+
+## API Surface
+
+Configured base path:
+
+```text
+/seats-allocation-service/v1
 ```
 
-------------------------------------------------------------------------
+Primary endpoints:
 
-### 4. Confirm Seats
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /events/{eventId}/seats` | Fetch event seat map |
+| `GET /events/{eventId}/seats/availability` | Fetch aggregate availability counts |
+| `POST /events/{eventId}/locks` | Public/protected lock operation |
+| `POST /events/{eventId}/locks/release` | Public/protected user lock release |
+| `POST /internal/seats/{eventId}/locks` | Internal lock operation |
+| `POST /internal/seats/confirm` | Confirm locked seats after payment success |
+| `POST /internal/seats/release` | Release seats for failure/cancellation/recovery |
+| `POST /internal/seats/{eventId}/locks/release` | Internal lock release by user |
+| `GET /internal/locks?bookingId={bookingId}` | Fetch active lock details and amount/currency |
 
-Marks seats as booked after payment success.
+Detailed request/response examples are in [api.md](api.md).
 
-    POST /internal/seats/confirm
+## Reliability And Consistency Choices
 
-------------------------------------------------------------------------
+- **PostgreSQL is authoritative:** seat state is stored in `event_seats`.
+- **Pessimistic row locking:** lock/confirm/release operations use `SELECT ... FOR UPDATE` semantics through JPA pessimistic locks.
+- **Lock TTL:** locks expire after 10 minutes and are treated as available by availability reads when expired.
+- **Idempotency:** lock, confirm, release, and inventory init flows store payload hashes and response payloads.
+- **Conflict detection:** same idempotency key with different payload is rejected.
+- **Redis as acceleration, not authority:** Redis is used for response replay and seat-map caching; durable state stays in PostgreSQL.
+- **Kafka for background inventory propagation:** inventory initialization is asynchronous because it is not on the checkout critical path.
+- **Synchronous checkout path:** seat locking and confirmation remain synchronous because callers need immediate consistency results.
 
-### 5. Release Seats
+## Data Model
 
-Releases locked seats if payment fails or booking expires.
+Core tables:
 
-    POST /internal/seats/release
+- `event_inventory_context`
+- `event_seats`
+- `allocation_idempotency`
 
-------------------------------------------------------------------------
+Schema: [scripts/db.sql](scripts/db.sql)
 
-### 6. Get Lock Details
+Important indexes:
 
-Fetches the active lock for a booking, including seat-level pricing and the
-aggregated total amount.
+- event + section lookup for seat map reads
+- event + status lookup for availability reads
+- lock expiry lookup for cleanup/recovery
+- locked-by lookup for lock detail and release flows
+- idempotency lookup by operation/resource/key
 
-    GET /internal/locks?bookingId={bookingId}
+## Authentication
 
-Response:
+Read and public lock APIs require a valid JWT through `EventSeatsJwtAuthenticationFilter`.
 
-``` json
-{
-  "status": "SUCCESS",
-  "message": "Lock details fetched successfully",
-  "result": {
-    "bookingId": "ce10f1d8-f7c5-4e0a-a6d5-6c40b3376c0f",
-    "eventId": "9c9a7b0f-bf09-4f91-9235-4a4bbf34f97b",
-    "seats": [
-      {
-        "eventSeatId": "5f84b7a0-2d91-4db6-bd54-43b2c2a4337f",
-        "sectionId": "6d4f7126-55f3-4a96-b4c0-c592b6eefb8d",
-        "priceCents": 2200
-      },
-      {
-        "eventSeatId": "b3cd59be-f47c-4513-91f2-5ef97afac5b9",
-        "sectionId": "6d4f7126-55f3-4a96-b4c0-c592b6eefb8d",
-        "priceCents": 1800
-      }
-    ],
-    "totalAmountMinor": 4000,
-    "currency": "USD",
-    "lockExpiresAt": "2026-03-16T15:50:00Z",
-    "status": "LOCKED"
-  }
-}
+Internal APIs require trusted service headers:
+
+```http
+X-Service-Name: <service-name>
+X-Service-Token: <configured-token>
 ```
 
-------------------------------------------------------------------------
-
-## Kafka Events
-
-### InventoryInitRequested
-
-Triggered by **Event Service** after event creation.
-
-Topic:
-
-    inventory-init.v1
-
-Example payload:
-
-``` json
-{
-  "eventType": "EVENT_PUBLISHED",
-  "eventId": "9c9a7b0f-bf09-4f91-9235-4a4bbf34f97b",
-  "venueId": "6f63c2bb-6995-4be3-a472-9cf2343a70ef",
-  "organiserId": "e8f9d5f4-4b52-4d4f-8b9c-c58aaf2e3b58",
-  "organiserEmail": "ops@example.com",
-  "title": "Spring Music Fest",
-  "category": "MUSIC",
-  "startsAt": "2026-04-20T18:30:00Z",
-  "endsAt": "2026-04-20T22:00:00Z",
-  "publishedAt": "2026-04-12T12:40:00Z",
-  "sectionPrices": [
-    {
-      "sectionId": "a9d9ad1a-d9ef-4f19-b79e-dbd0fcaef652",
-      "sectionName": "VIP",
-      "sortOrder": 1,
-      "priceCents": 2500,
-      "currency": "INR"
-    }
-  ],
-  "seats": [
-    {
-      "eventSeatId": "88a6a952-17e9-4748-a56a-47f231e82e55",
-      "venueSeatId": "a2b35f4d-a31a-41db-ae0b-d0b0217bfe9d",
-      "sectionId": "a9d9ad1a-d9ef-4f19-b79e-dbd0fcaef652",
-      "seatCode": "VIP-R01-S01",
-      "rowLabel": "R01",
-      "seatNumber": 1,
-      "priceCents": 2500,
-      "currency": "INR"
-    }
-  ]
-}
-```
-
-Notes:
-- `requestId` is derived from `eventId` in the current consumer.
-- Currency is resolved from `seats[].currency`, then `sectionPrices[].currency`,
-  and falls back to the configured default if missing.
-- Seat inventory creation uses the `seats` array and maps
-  `venueSeatId`, `sectionId`, and `priceCents` into the service's
-  pricing model.
-
-------------------------------------------------------------------------
-
-### InventoryInitialized
-
-Published after inventory creation.
-
-Topic:
-
-    inventory-published.v1
-
-Example payload:
-
-``` json
-{
-  "requestId": "9c9a7b0f-bf09-4f91-9235-4a4bbf34f97b",
-  "eventId": "9c9a7b0f-bf09-4f91-9235-4a4bbf34f97b",
-  "status": "SUCCESS",
-  "totalSeats": 1,
-  "seatMapVersion": null,
-  "processedAt": "2026-04-12T12:40:05Z"
-}
-```
-
-------------------------------------------------------------------------
-
-## Database Schema
-
-### seats table
-
-  Column         Type        Description
-  -------------- ----------- --------------------
-  id             UUID        Primary key
-  event_id       VARCHAR     Event identifier
-  seat_number    VARCHAR     Seat identifier
-  status         VARCHAR     Seat state
-  locked_until   TIMESTAMP   Lock expiry
-  booking_id     VARCHAR     Associated booking
-
-------------------------------------------------------------------------
-
-## Running Locally
-
-### Prerequisites
-
--   Docker
--   Java 17
--   Maven
--   Kafka
--   PostgreSQL
--   Redis
-
-------------------------------------------------------------------------
-
-### Start dependencies
-
-Example using Docker:
-
-    docker compose up -d
-
-------------------------------------------------------------------------
-
-### Run the service
-
-    mvn spring-boot:run
-
-------------------------------------------------------------------------
+Some internal access paths also validate JWT roles and allow only `ADMIN` or `ORGANISER` claims.
 
 ## Configuration
 
-Example `application.yml`
+Primary settings:
 
-    spring:
-      datasource:
-        url: jdbc:postgresql://localhost:5432/allocation_db
-        username: postgres
-        password: postgres
+| Property | Purpose |
+| --- | --- |
+| `api.prefix` | Servlet context path |
+| `spring.datasource.url` | PostgreSQL connection URL |
+| `spring.datasource.username` | Database username |
+| `spring.datasource.password` | Database password |
+| `spring.kafka.bootstrap-servers` | Kafka broker list |
+| `app.kafka.topics.inventory-init-request` | Inventory init input topic |
+| `app.kafka.topics.inventory-init-result` | Inventory init result topic |
+| `app.inventory.default-currency` | Currency fallback for inventory events |
+| `internal.api.service-tokens.*` | Trusted service tokens |
 
-      redis:
-        host: localhost
-        port: 6379
+## Running Locally
 
-      kafka:
-        bootstrap-servers: localhost:9092
+1. Start PostgreSQL, Redis, and Kafka.
+2. Create/apply the `allocation_db` schema from [scripts/db.sql](scripts/db.sql).
+3. Configure datasource, Kafka, Redis, JWT, and internal service-token properties.
+4. Run:
 
-------------------------------------------------------------------------
+```powershell
+.\mvnw.cmd spring-boot:run
+```
 
-## Future Improvements
+Run tests:
 
--   Seat selection optimization
--   Distributed seat locking strategy
--   Dead-letter queue for failed events
--   Event sourcing for seat state history
--   High availability using Kafka partitions
+```powershell
+.\mvnw.cmd test
+```
 
-------------------------------------------------------------------------
+## Current Limitations
 
-## Author
+- Expired locks are treated as available in reads, but there is no scheduled cleanup job in this repository yet.
+- Kafka consumer retry/dead-letter handling is basic and should be hardened for production.
+- Seat-map pagination/filtering is not implemented beyond returning the event seat list.
+- Redis cache failure is tolerated, but cache metrics/alerts are not implemented.
+- Lock TTL is currently fixed in code at 10 minutes.
+- The service does not directly own payment or booking state; it only owns seat inventory state.
 
-Abhinav Mantri
+## Production Hardening Roadmap
+
+- Add scheduled cleanup or async recovery for expired locks.
+- Add Kafka retry topics and dead-letter topics for inventory initialization failures.
+- Add outbox/event publication for seat lock/confirm/release state changes.
+- Add explicit metrics for lock conflicts, expired locks, idempotency replays, and Kafka lag.
+- Add pagination/section filtering for large venue seat maps.
+- Move lock TTL to configuration.
+- Add contract tests across event-management, booking, payment, and seats-allocation boundaries.
